@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import { adminRouter } from "./routes/admin.js";
 import { chatRouter } from "./routes/chat.js";
 
@@ -16,7 +16,20 @@ app.use("/api/admin", adminRouter);
 // bkz. DESIGN.md Bölüm 6 — Chat Bot Deneyimi
 app.use("/api/chat", chatRouter);
 
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).json({
+    error: "internal_error",
+    message: err instanceof Error ? err.message : "Beklenmeyen bir hata oluştu",
+  });
+};
+app.use(errorHandler);
+
 const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.listen(port, () => {
   console.log(`app listening on port ${port}`);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection", reason);
 });
