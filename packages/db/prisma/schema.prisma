@@ -1,0 +1,496 @@
+// Prisma schema — DESIGN.md ile birebir uyumlu tutulmalıdır.
+// Bir tabloyu değiştirirken lütfen DESIGN.md'deki ilgili bölümü de güncelleyin.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// 4.1 AI Sağlayıcıları
+// ---------------------------------------------------------------------------
+
+enum AiProviderType {
+  openai
+  anthropic
+  azure_openai
+  google
+  other
+}
+
+model AiProvider {
+  id               String         @id @default(uuid())
+  name             String
+  providerType     AiProviderType @map("provider_type")
+  apiBaseUrl       String?        @map("api_base_url")
+  apiKeyEncrypted  String         @map("api_key_encrypted")
+  model            String
+  defaultParams    Json           @default("{}") @map("default_params")
+  isActive         Boolean        @default(false) @map("is_active")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  roleAccess         RoleAiProvider[]
+  chatSessions       ChatSession[]
+  aiPromptTemplates  AiPromptTemplate[]
+  budgetPolicies     BudgetPolicy[]
+  usageRecords       AiUsageRecord[]
+  usageMonthlyRollup AiUsageMonthlyRollup[]
+
+  @@map("ai_providers")
+}
+
+// ---------------------------------------------------------------------------
+// 4.2 / 9. MCP Entegrasyonları
+// ---------------------------------------------------------------------------
+
+enum McpIntegrationType {
+  http_api
+  database
+  internal_tool
+  file_share
+  smtp_mail
+}
+
+model McpIntegration {
+  id               String             @id @default(uuid())
+  name             String
+  type             McpIntegrationType
+  connectionConfig Json               @map("connection_config")
+  toolSchema       Json               @default("{}") @map("tool_schema")
+  isEnabled        Boolean            @default(true) @map("is_enabled")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  rolePermissions RoleMcpPermission[]
+  templateSteps   TemplateStep[]
+  mailSendLogs    MailSendLog[]
+
+  @@map("mcp_integrations")
+}
+
+// ---------------------------------------------------------------------------
+// 4.3 Kullanıcı & Yetkilendirme
+// ---------------------------------------------------------------------------
+
+enum AuthSource {
+  local
+  ldap
+}
+
+model User {
+  id           String     @id @default(uuid())
+  fullName     String     @map("full_name")
+  email        String     @unique
+  authSource   AuthSource @default(local) @map("auth_source")
+  passwordHash String?    @map("password_hash")
+  ldapDn       String?    @map("ldap_dn")
+  isActive     Boolean    @default(true) @map("is_active")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  skills UserSkill[]
+  roles  UserRole[]
+
+  chatSessions       ChatSession[]
+  templatesOwned     Template[]           @relation("TemplateOwner")
+  templateRunsTrigg  TemplateRun[]
+  aiPromptTemplates  AiPromptTemplate[]
+  usageRecords       AiUsageRecord[]
+  usageMonthlyRollup AiUsageMonthlyRollup[]
+  mailSendLogs       MailSendLog[]
+
+  @@map("users")
+}
+
+model Skill {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  users             UserSkill[]
+  chatSessions      ChatSession[]
+  usageRecords      AiUsageRecord[]
+  usageMonthlyRollup AiUsageMonthlyRollup[]
+
+  @@map("skills")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  users           UserRole[]
+  mcpPermissions  RoleMcpPermission[]
+  aiProviders     RoleAiProvider[]
+
+  @@map("roles")
+}
+
+model UserSkill {
+  userId  String @map("user_id")
+  skillId String @map("skill_id")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([userId, skillId])
+  @@map("user_skills")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RoleMcpPermission {
+  id                String   @id @default(uuid())
+  roleId            String   @map("role_id")
+  mcpIntegrationId  String   @map("mcp_integration_id")
+  allowedOperations Json     @default("[]") @map("allowed_operations")
+  getFilters        Json     @default("{}") @map("get_filters")
+
+  role           Role           @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  mcpIntegration McpIntegration @relation(fields: [mcpIntegrationId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, mcpIntegrationId])
+  @@map("role_mcp_permissions")
+}
+
+model RoleAiProvider {
+  id           String @id @default(uuid())
+  roleId       String @map("role_id")
+  aiProviderId String @map("ai_provider_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  aiProvider AiProvider @relation(fields: [aiProviderId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, aiProviderId])
+  @@map("role_ai_providers")
+}
+
+// ---------------------------------------------------------------------------
+// 4.4 Chat
+// ---------------------------------------------------------------------------
+
+enum ChatMessageRole {
+  user
+  assistant
+  tool
+}
+
+model ChatSession {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  skillId      String   @map("skill_id")
+  aiProviderId String   @map("ai_provider_id")
+  title        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill      Skill      @relation(fields: [skillId], references: [id])
+  aiProvider AiProvider @relation(fields: [aiProviderId], references: [id])
+
+  messages          ChatMessage[]
+  templatesFromHere Template[]    @relation("TemplateSourceSession")
+
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id           String          @id @default(uuid())
+  sessionId    String          @map("session_id")
+  role         ChatMessageRole
+  content      String
+  toolCallData Json?           @map("tool_call_data")
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("chat_messages")
+}
+
+// ---------------------------------------------------------------------------
+// Sistem ayarları (ör. chat_retention_days)
+// ---------------------------------------------------------------------------
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
+// ---------------------------------------------------------------------------
+// 9.1 Mail gönderim denetim kaydı
+// ---------------------------------------------------------------------------
+
+enum MailSendStatus {
+  sent
+  failed
+}
+
+model MailSendLog {
+  id               String         @id @default(uuid())
+  userId           String         @map("user_id")
+  mcpIntegrationId String         @map("mcp_integration_id")
+  toAddresses      String[]       @map("to_addresses")
+  subject          String
+  status           MailSendStatus
+  errorMessage     String?        @map("error_message")
+  createdAt        DateTime       @default(now()) @map("created_at")
+
+  user           User           @relation(fields: [userId], references: [id])
+  mcpIntegration McpIntegration @relation(fields: [mcpIntegrationId], references: [id])
+
+  @@map("mail_send_logs")
+}
+
+// ---------------------------------------------------------------------------
+// 10. Şablonlar (Template)
+// ---------------------------------------------------------------------------
+
+enum TemplateVisibility {
+  private
+  shared
+}
+
+enum TemplateStepType {
+  mcp_call
+  ai_transform
+}
+
+enum TemplateRunStatus {
+  running
+  success
+  failed
+}
+
+enum AiOutputFormat {
+  text
+  json
+  html
+}
+
+model Template {
+  id                   String             @id @default(uuid())
+  name                 String
+  description          String?
+  ownerUserId          String             @map("owner_user_id")
+  visibility           TemplateVisibility @default(private)
+  sourceSessionId      String?            @map("source_session_id")
+  resultHtmlTemplate   String             @map("result_html_template")
+  scheduleCron         String?            @map("schedule_cron")
+  isScheduleEnabled    Boolean            @default(false) @map("is_schedule_enabled")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  owner         User         @relation("TemplateOwner", fields: [ownerUserId], references: [id])
+  sourceSession ChatSession? @relation("TemplateSourceSession", fields: [sourceSessionId], references: [id])
+
+  steps      TemplateStep[]
+  parameters TemplateParameter[]
+  runs       TemplateRun[]
+
+  @@map("templates")
+}
+
+model TemplateStep {
+  id                 String           @id @default(uuid())
+  templateId         String           @map("template_id")
+  stepOrder          Int              @map("step_order")
+  stepKey            String           @map("step_key")
+  stepType           TemplateStepType @map("step_type")
+  mcpIntegrationId   String?          @map("mcp_integration_id")
+  operation          String?
+  aiPromptTemplateId String?          @map("ai_prompt_template_id")
+  inputMapping       Json             @default("{}") @map("input_mapping")
+  outputPlaceholder  String?          @map("output_placeholder")
+
+  template         Template          @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  mcpIntegration   McpIntegration?   @relation(fields: [mcpIntegrationId], references: [id])
+  aiPromptTemplate AiPromptTemplate? @relation(fields: [aiPromptTemplateId], references: [id])
+  runSteps         TemplateRunStep[]
+
+  @@unique([templateId, stepKey])
+  @@map("template_steps")
+}
+
+enum TemplateParamType {
+  text
+  number
+  date
+  select
+}
+
+model TemplateParameter {
+  id           String            @id @default(uuid())
+  templateId   String            @map("template_id")
+  paramKey     String            @map("param_key")
+  label        String
+  type         TemplateParamType
+  defaultValue String?           @map("default_value")
+  required     Boolean           @default(false)
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, paramKey])
+  @@map("template_parameters")
+}
+
+model TemplateRun {
+  id                String            @id @default(uuid())
+  templateId        String            @map("template_id")
+  triggeredByUserId String?           @map("triggered_by_user_id")
+  parameterValues   Json              @default("{}") @map("parameter_values")
+  status            TemplateRunStatus @default(running)
+  startedAt         DateTime          @default(now()) @map("started_at")
+  finishedAt        DateTime?         @map("finished_at")
+
+  template        Template          @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  triggeredByUser User?             @relation(fields: [triggeredByUserId], references: [id])
+  runSteps        TemplateRunStep[]
+  result          TemplateRunResult?
+
+  @@map("template_runs")
+}
+
+model TemplateRunStep {
+  id            String   @id @default(uuid())
+  templateRunId String   @map("template_run_id")
+  stepId        String   @map("step_id")
+  rawResult     Json?    @map("raw_result")
+  tokenUsage    Json?    @map("token_usage")
+  error         String?
+
+  templateRun TemplateRun  @relation(fields: [templateRunId], references: [id], onDelete: Cascade)
+  step        TemplateStep @relation(fields: [stepId], references: [id])
+
+  @@map("template_run_steps")
+}
+
+model TemplateRunResult {
+  id            String @id @default(uuid())
+  templateRunId String @unique @map("template_run_id")
+  renderedHtml  String @map("rendered_html")
+
+  templateRun TemplateRun @relation(fields: [templateRunId], references: [id], onDelete: Cascade)
+
+  @@map("template_run_results")
+}
+
+model AiPromptTemplate {
+  id                String             @id @default(uuid())
+  name              String
+  description       String?
+  aiProviderId      String             @map("ai_provider_id")
+  systemPrompt      String             @map("system_prompt")
+  userPromptTemplate String            @map("user_prompt_template")
+  outputFormat      AiOutputFormat     @default(text) @map("output_format")
+  outputSchema      Json?              @map("output_schema")
+  ownerUserId       String             @map("owner_user_id")
+  visibility        TemplateVisibility @default(private)
+  createdAt         DateTime           @default(now()) @map("created_at")
+
+  aiProvider AiProvider     @relation(fields: [aiProviderId], references: [id])
+  owner      User           @relation(fields: [ownerUserId], references: [id])
+  usedInSteps TemplateStep[]
+
+  @@map("ai_prompt_templates")
+}
+
+// ---------------------------------------------------------------------------
+// 12. Bütçe (Budget) Yönetimi
+// ---------------------------------------------------------------------------
+
+enum BudgetScopeType {
+  global
+  skill
+  user
+}
+
+enum BudgetPeriod {
+  daily
+  monthly
+}
+
+model BudgetPolicy {
+  id           String          @id @default(uuid())
+  aiProviderId String          @map("ai_provider_id")
+  scopeType    BudgetScopeType @map("scope_type")
+  scopeId      String?         @map("scope_id")
+  period       BudgetPeriod
+  limitUsd     Decimal         @map("limit_usd") @db.Decimal(12, 4)
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+
+  aiProvider AiProvider @relation(fields: [aiProviderId], references: [id], onDelete: Cascade)
+  // scopeId için (skill_id / user_id) doğrudan Prisma FK tanımlanmıyor —
+  // scope_type'a göre değişken bir hedefe işaret ettiğinden uygulama katmanında doğrulanır.
+
+  @@unique([aiProviderId, scopeType, scopeId, period])
+  @@map("budget_policies")
+}
+
+enum AiUsageSource {
+  chat
+  template_ai_transform
+}
+
+model AiUsageRecord {
+  id               String        @id @default(uuid())
+  userId           String        @map("user_id")
+  aiProviderId     String        @map("ai_provider_id")
+  skillId          String?       @map("skill_id")
+  source           AiUsageSource
+  referenceId      String?       @map("reference_id")
+  tokensPrompt     Int           @map("tokens_prompt")
+  tokensCompletion Int           @map("tokens_completion")
+  costUsd          Decimal       @map("cost_usd") @db.Decimal(12, 6)
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  user       User       @relation(fields: [userId], references: [id])
+  aiProvider AiProvider @relation(fields: [aiProviderId], references: [id])
+  skill      Skill?     @relation(fields: [skillId], references: [id])
+
+  @@index([userId, aiProviderId, createdAt])
+  @@map("ai_usage_records")
+}
+
+model AiUsageMonthlyRollup {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  aiProviderId String   @map("ai_provider_id")
+  skillId      String?  @map("skill_id")
+  yearMonth    String   @map("year_month") // "YYYY-MM"
+  totalCostUsd Decimal  @default(0) @map("total_cost_usd") @db.Decimal(12, 6)
+  totalTokens  BigInt   @default(0) @map("total_tokens")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user       User       @relation(fields: [userId], references: [id])
+  aiProvider AiProvider @relation(fields: [aiProviderId], references: [id])
+  skill      Skill?     @relation(fields: [skillId], references: [id])
+
+  // NOT: Postgres'te NULL değerler unique kısıtlamada birbirinden farklı sayılır,
+  // bu yüzden skill_id NULL olan (skill bağlamı olmayan) kullanım için bu @@unique
+  // tek başına yeterli değildir. İlk migration üretildiğinde bu constraint,
+  // skill_id IS NULL durumunu da kapsayan bir partial unique index ile
+  // (COALESCE(skill_id, '00000000-0000-0000-0000-000000000000')) desteklenecek.
+  @@unique([userId, aiProviderId, skillId, yearMonth])
+  @@map("ai_usage_monthly_rollup")
+}

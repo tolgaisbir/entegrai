@@ -1,0 +1,19 @@
+{
+  "name": "tegrai-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "app",
+    "mcp-server"
+  ],
+  "scripts": {
+    "db:generate": "npm run generate --workspace=packages/db",
+    "db:migrate": "npm run migrate:dev --workspace=packages/db",
+    "dev:app": "npm run dev --workspace=app",
+    "dev:mcp": "npm run dev --workspace=mcp-server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
