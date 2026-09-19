@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tegrai/db": "*",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "zod": "^4.6.5"
