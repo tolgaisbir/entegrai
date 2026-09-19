@@ -1,7 +1,7 @@
 import { AiProviderType, type AiProvider } from "@tegrai/db";
 
 // DESIGN.md Bölüm 6 — Chat Bot Deneyimi: seçili AI sağlayıcısına gerçek istek atma.
-// Token/maliyet kaydı (ai_usage_records) DESIGN.md Bölüm 12 (Bütçe) ile birlikte eklenecek.
+// Token sayıları DESIGN.md Bölüm 12 (Bütçe) tarafından maliyet hesaplamak için kullanılır.
 
 export interface ChatTurn {
   role: "user" | "assistant";
@@ -10,6 +10,8 @@ export interface ChatTurn {
 
 export interface AiReply {
   content: string;
+  tokensPrompt: number;
+  tokensCompletion: number;
 }
 
 interface DefaultParams {
@@ -50,9 +52,16 @@ export async function generateReply(
     if (!resp.ok) {
       throw new Error(`Anthropic API hatası: HTTP ${resp.status} ${await resp.text()}`);
     }
-    const data = (await resp.json()) as { content: { type: string; text?: string }[] };
+    const data = (await resp.json()) as {
+      content: { type: string; text?: string }[];
+      usage: { input_tokens: number; output_tokens: number };
+    };
     const text = data.content.find((block) => block.type === "text")?.text ?? "";
-    return { content: text };
+    return {
+      content: text,
+      tokensPrompt: data.usage.input_tokens,
+      tokensCompletion: data.usage.output_tokens,
+    };
   }
 
   if (provider.providerType === AiProviderType.openai) {
@@ -76,8 +85,15 @@ export async function generateReply(
     if (!resp.ok) {
       throw new Error(`OpenAI API hatası: HTTP ${resp.status} ${await resp.text()}`);
     }
-    const data = (await resp.json()) as { choices: { message: { content: string } }[] };
-    return { content: data.choices[0]?.message.content ?? "" };
+    const data = (await resp.json()) as {
+      choices: { message: { content: string } }[];
+      usage: { prompt_tokens: number; completion_tokens: number };
+    };
+    return {
+      content: data.choices[0]?.message.content ?? "",
+      tokensPrompt: data.usage.prompt_tokens,
+      tokensCompletion: data.usage.completion_tokens,
+    };
   }
 
   throw new Error(`'${provider.providerType}' sağlayıcı tipi için chat henüz desteklenmiyor`);

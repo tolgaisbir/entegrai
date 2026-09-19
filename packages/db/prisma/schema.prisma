@@ -29,6 +29,9 @@ model AiProvider {
   apiBaseUrl       String?        @map("api_base_url")
   apiKeyEncrypted  String         @map("api_key_encrypted")
   model            String
+  // temperature, max_tokens, system_prompt'un yanı sıra fiyatlandırma da burada tutulur
+  // (ayrı bir ai_provider_pricing tablosu yerine, DESIGN.md 12.1): price_per_1k_input_usd,
+  // price_per_1k_output_usd. Tanımlı değilse cost_usd 0 kaydedilir (token sayıları yine tutulur).
   defaultParams    Json           @default("{}") @map("default_params")
   isActive         Boolean        @default(false) @map("is_active")
   createdAt        DateTime       @default(now()) @map("created_at")
@@ -487,11 +490,14 @@ model AiUsageMonthlyRollup {
   aiProvider AiProvider @relation(fields: [aiProviderId], references: [id])
   skill      Skill?     @relation(fields: [skillId], references: [id])
 
-  // NOT: Postgres'te NULL değerler unique kısıtlamada birbirinden farklı sayılır,
-  // bu yüzden skill_id NULL olan (skill bağlamı olmayan) kullanım için bu @@unique
-  // tek başına yeterli değildir. İlk migration üretildiğinde bu constraint,
-  // skill_id IS NULL durumunu da kapsayan bir partial unique index ile
-  // (COALESCE(skill_id, '00000000-0000-0000-0000-000000000000')) desteklenecek.
-  @@unique([userId, aiProviderId, skillId, yearMonth])
+  // Postgres'te NULL değerler unique kısıtlamada birbirinden farklı sayıldığından,
+  // skill_id NULL olan (skill bağlamı olmayan, ör. ileride template ai_transform)
+  // satırlar için normal bir @@unique yeterli değil. Gerçek uniqueness, migration
+  // `20260919_fix_rollup_null_skill_unique`'te eklenen iki partial unique index ile
+  // sağlanıyor (skill_id IS NULL / IS NOT NULL) — Prisma şema dili partial index'i
+  // ifade edemediğinden burada temsil edilmiyor, sadece sorgu performansı için normal
+  // bir index bırakılıyor. Null-skill satırlarına yazarken `$executeRaw` ile
+  // `ON CONFLICT ... WHERE skill_id IS NULL` kullanılmalı (bkz. app/src/lib/budget.ts).
+  @@index([userId, aiProviderId, yearMonth])
   @@map("ai_usage_monthly_rollup")
 }

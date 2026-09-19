@@ -4,6 +4,7 @@ import { mcpIntegrationsRouter } from "./admin/mcpIntegrations.js";
 import { usersRouter } from "./admin/users.js";
 import { skillsRouter } from "./admin/skills.js";
 import { rolesRouter } from "./admin/roles.js";
+import { budgetPoliciesRouter } from "./admin/budgetPolicies.js";
 import { requireAdmin } from "../middleware/auth.js";
 
 export const adminRouter = Router();
@@ -26,4 +27,5 @@ adminRouter.use("/skills", skillsRouter);
 // DESIGN.md 5.5 — Role Yönetimi (role CRUD + mcp/ai-provider erişim atamaları)
 adminRouter.use("/roles", rolesRouter);
 
-// DESIGN.md 12.7 — Bütçe & Kullanım Yönetimi — TODO
+// DESIGN.md 12.7 — Bütçe & Kullanım Yönetimi
+adminRouter.use("/budget-policies", budgetPoliciesRouter);

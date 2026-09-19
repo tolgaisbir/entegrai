@@ -1,19 +1,21 @@
 import { Router } from "express";
 import { z } from "zod";
-import { ChatMessageRole } from "@tegrai/db";
+import { AiUsageSource, ChatMessageRole } from "@tegrai/db";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { decryptSecret } from "../lib/crypto.js";
 import { generateReply, type ChatTurn } from "../lib/aiClient.js";
 import { requireAuth } from "../middleware/auth.js";
+import { calculateCostUsd, getBudgetStatuses, isBudgetExceeded, recordUsage } from "../lib/budget.js";
 
 // DESIGN.md Bölüm 6 — Chat Bot Deneyimi: skill seçimi, sol frame'de skill'e göre
 // gruplanmış chat geçmişi, mesaj gönderme + seçili AI sağlayıcıdan yanıt alma.
+// DESIGN.md Bölüm 12 — Bütçe: mesaj göndermeden önce kontrol edilir, başarılı yanıttan
+// sonra token/maliyet kaydedilir (bkz. lib/budget.ts).
 //
 // MCP tool çağrısı desteği (role_mcp_permissions/get_filters uygulanması) henüz yok —
 // mcp-server dinamik tool yüklemesi tamamlanınca eklenecek (bkz. PROGRESS.md).
 // DESIGN.md Bölüm 10 — Şablon (Template) tetikleme/izleme uç noktaları — TODO
-// DESIGN.md Bölüm 12.6 — Kullanıcının kendi kullanım/kalan bütçe görünürlüğü — TODO
 
 export const chatRouter = Router();
 
@@ -64,7 +66,18 @@ chatRouter.get(
       where: { id: { in: ids } },
       select: { id: true, name: true, providerType: true, model: true, isActive: true },
     });
-    res.json(providers);
+
+    // DESIGN.md 12.6 — skillId verilirse her provider'ın yanında kalan bütçe özeti dönülür.
+    const skillId = typeof req.query.skillId === "string" ? req.query.skillId : undefined;
+    if (!skillId) return res.json(providers);
+
+    const withBudget = await Promise.all(
+      providers.map(async (provider) => ({
+        ...provider,
+        budget: await getBudgetStatuses(req.user!.id, provider.id, skillId),
+      })),
+    );
+    res.json(withBudget);
   }),
 );
 
@@ -149,7 +162,8 @@ chatRouter.get(
     if (!session || session.userId !== req.user!.id) {
       return res.status(404).json({ error: "not_found" });
     }
-    res.json(session);
+    const budget = await getBudgetStatuses(req.user!.id, session.aiProviderId, session.skillId);
+    res.json({ ...session, budget });
   }),
 );
 
@@ -200,6 +214,25 @@ chatRouter.post(
       return res.status(404).json({ error: "not_found" });
     }
 
+    const exceeded = await isBudgetExceeded(req.user!.id, session.aiProviderId, session.skillId);
+    if (exceeded) {
+      const otherProviderIds = (await accessibleAiProviderIds(req.user!.id)).filter(
+        (id) => id !== session.aiProviderId,
+      );
+      const alternatives = await prisma.aiProvider.findMany({
+        where: { id: { in: otherProviderIds } },
+        select: { id: true, name: true, providerType: true },
+      });
+      return res.status(403).json({
+        error: "budget_exceeded",
+        period: exceeded.period,
+        source: exceeded.source,
+        limitUsd: exceeded.limitUsd,
+        usedUsd: exceeded.usedUsd,
+        alternativeAiProviders: alternatives,
+      });
+    }
+
     const userMessage = await prisma.chatMessage.create({
       data: { sessionId: session.id, role: ChatMessageRole.user, content: parsed.data.content },
     });
@@ -221,6 +254,16 @@ chatRouter.post(
       const reply = await generateReply(session.aiProvider, apiKey, history);
       assistantMessage = await prisma.chatMessage.create({
         data: { sessionId: session.id, role: ChatMessageRole.assistant, content: reply.content },
+      });
+      await recordUsage({
+        userId: req.user!.id,
+        aiProviderId: session.aiProviderId,
+        skillId: session.skillId,
+        source: AiUsageSource.chat,
+        referenceId: assistantMessage.id,
+        tokensPrompt: reply.tokensPrompt,
+        tokensCompletion: reply.tokensCompletion,
+        costUsd: calculateCostUsd(session.aiProvider, reply.tokensPrompt, reply.tokensCompletion),
       });
     } catch (err) {
       await prisma.chatSession.update({

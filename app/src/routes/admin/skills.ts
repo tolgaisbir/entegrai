@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
 import { asyncHandler } from "../../lib/asyncHandler.js";
+import { isForeignKeyRestrictError } from "../../lib/prismaErrors.js";
 
 // DESIGN.md 5.4 — Skill Yönetimi: departman/görev/yetkinlik tanımları (CRUD).
 
@@ -65,7 +66,19 @@ skillsRouter.delete(
   asyncHandler(async (req, res) => {
     const existing = await prisma.skill.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: "not_found" });
-    await prisma.skill.delete({ where: { id: req.params.id } });
+    try {
+      await prisma.skill.delete({ where: { id: req.params.id } });
+    } catch (err) {
+      // chat_sessions.skill_id NOT NULL + RESTRICT'tir (ve ai_usage_records benzer) —
+      // bu skill'de geçmiş sohbet/kullanım varsa silinemez.
+      if (isForeignKeyRestrictError(err)) {
+        return res.status(409).json({
+          error: "skill_has_dependent_records",
+          message: "Bu skill'e ait sohbet/kullanım geçmişi var, silinemez.",
+        });
+      }
+      throw err;
+    }
     res.status(204).send();
   }),
 );

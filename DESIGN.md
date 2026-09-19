@@ -68,7 +68,7 @@ Bileşenler:
 | api_base_url | TEXT | Opsiyonel, özel endpoint |
 | api_key_encrypted | TEXT | Şifrelenmiş API anahtarı |
 | model | TEXT | ör. `gpt-4o`, `claude-sonnet-5` |
-| default_params | JSONB | temperature, max_tokens, system_prompt vb. |
+| default_params | JSONB | temperature, max_tokens, system_prompt vb. **+ fiyatlandırma** (`price_per_1k_input_usd`, `price_per_1k_output_usd`) — bkz. 12.1, ayrı bir `ai_provider_pricing` tablosu yerine burada tutulur |
 | is_active | BOOLEAN | Chat bot'un şu an kullandığı sağlayıcı mı |
 | created_at / updated_at | TIMESTAMP | |
 
@@ -176,6 +176,7 @@ Bileşenler:
 - [x] Zamanlanmış `ai_transform` adımları da aynı prensiple **çalıştıran kullanıcının** (zamanlanmış çalıştırmada: şablonun son çalıştırılmasını tetikleyen/sahibi olan kullanıcının) yetkisi ve bütçesi üzerinden işler
 - [x] AI kullanımı için **bütçe (budget) yönetimi** eklenecek — global + skill bazlı + kullanıcı bazlı, kullanım/kalan görünürlüğü ile (bkz. yeni Bölüm 13)
 - [x] **Auth mekanizması**: `local` kullanıcılar için `POST /api/auth/login` (email+password) ile imzalanmış **JWT bearer token** (henüz frontend olmadığından cookie/session yerine basit `Authorization: Bearer` başlığı tercih edildi). Tüm `/api/admin/*` uçları `is_admin` role'üne sahip, aktif ve `must_change_password=false` bir kullanıcı gerektirir. LDAP login (`ldapjs` ile bind) henüz uygulanmadı — bkz. PROGRESS.md.
+- [x] **Bütçe kontrolü zamanlaması**: Kalan bütçe, AI sağlayıcıya istek atılmadan **önce** (bir önceki duruma göre) kontrol edilir — isteğin gerçek maliyeti ancak yanıt döndükten sonra bilinebildiğinden, bütçeyi dolduran mesajın kendisi yine de gönderilir; bir sonraki mesaj engellenir. `daily` period için ayrı bir rollup tablosu yok, `ai_usage_records` üzerinden canlı sorgu ile hesaplanır (veri hacmi günlük pencerede küçük); `monthly` period `ai_usage_monthly_rollup`'tan okunur (bkz. 12.4).
 
 ## 9. MCP Entegrasyon Tipleri (genişletme)
 
@@ -323,6 +324,8 @@ Bir AI isteği yapılacağı an, **(kullanıcı, ai_provider, ilgili skill)** ü
 3. Yoksa, o ai_provider için **global varsayılan** bütçe kullanılır.
 
 Şablon `ai_transform` adımlarında skill bağlamı, şablonun oluşturulduğu oturumun skill'i (`templates.source_session_id` → `chat_sessions.skill_id`) üzerinden belirlenir; yoksa doğrudan global/kullanıcı seviyesine düşülür.
+
+**Uygulama notu (kullanım havuzlama)**: Etkin bütçe kaynağı `skill` ise, o skill'in kullanımı `ai_usage_records`/`ai_usage_monthly_rollup`'ta sadece o `skill_id`'ye ait satırlar toplanarak hesaplanır. Kaynak `user` (override) veya `global` ise — ikisi de tanım gereği skill ayrımı yapmadığından — kullanım, o kullanıcının o ai_provider'daki **tüm skill'lerdeki toplam** kullanımı olarak hesaplanır (skill_id filtresi uygulanmadan toplanır).
 
 ### 12.3 Veri Modeli (taslak)
 

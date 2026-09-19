@@ -4,6 +4,7 @@ import { AiProviderType, Prisma, type AiProvider } from "@tegrai/db";
 import { prisma } from "../../lib/prisma.js";
 import { decryptSecret, encryptSecret, maskSecret } from "../../lib/crypto.js";
 import { asyncHandler } from "../../lib/asyncHandler.js";
+import { isForeignKeyRestrictError } from "../../lib/prismaErrors.js";
 
 // DESIGN.md 5.1 — AI Ayarları: sağlayıcı listesi (CRUD), API key girişi (maskeli),
 // model/parametre düzenleme, bağlantı testi.
@@ -105,7 +106,19 @@ aiProvidersRouter.delete(
   asyncHandler(async (req, res) => {
     const existing = await prisma.aiProvider.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: "not_found" });
-    await prisma.aiProvider.delete({ where: { id: req.params.id } });
+    try {
+      await prisma.aiProvider.delete({ where: { id: req.params.id } });
+    } catch (err) {
+      // ai_usage_records/ai_usage_monthly_rollup kalıcı saklanır (DESIGN.md 12.4) ve
+      // ai_provider_id FK'si RESTRICT'tir — kullanım geçmişi olan bir sağlayıcı silinemez.
+      if (isForeignKeyRestrictError(err)) {
+        return res.status(409).json({
+          error: "ai_provider_has_dependent_records",
+          message: "Bu sağlayıcıya ait kullanım geçmişi/atamalar var, silinemez. Önce pasife alın.",
+        });
+      }
+      throw err;
+    }
     res.status(204).send();
   }),
 );
