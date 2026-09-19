@@ -33,7 +33,13 @@ DB: Neon Postgres (`neondb`), ilk migration (`20260918234541_init`) uygulanmış
    - Anthropic/OpenAI için gerçek bağlantı testi; diğer provider tipleri için "desteklenmiyor" mesajı
    - Uçtan uca Neon DB'ye karşı test edildi (create/list/patch/test/delete)
 4. **Global hata yönetimi** — `app/src/lib/asyncHandler.ts` + `index.ts`'deki error handler middleware (Express 4'te yakalanmayan async hatalar artık process'i çökertmiyor, 500 JSON dönüyor).
-5. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD).
+5. **MCP Entegrasyonları CRUD** (DESIGN.md 5.2) — `app/src/routes/admin/mcpIntegrations.ts`
+   - `GET/POST /api/admin/mcp-integrations`, `GET/PATCH/DELETE /api/admin/mcp-integrations/:id`, `POST /:id/test`
+   - `connection_config` (JSONB) içindeki hassas alanlar (adında `key`/`password`/`secret`/`token`/`connectionString` geçenler) AES-256-GCM ile şifrelenip DB'ye yazılıyor, yanıtlarda maskeli dönüyor (aiProviders'daki `apiKeyPreview` deseninin JSON'a genellenmiş hali)
+   - `http_api` tipi için `baseUrl`/`url` + opsiyonel `apiKey`/`token` ile gerçek bağlantı testi; diğer tipler için "desteklenmiyor" mesajı
+   - Uçtan uca Neon DB'ye karşı test edildi (create/list/patch/test/delete)
+   - Yan düzeltme: `app/src/index.ts`'de `.env` yükleme, `dotenv/config` yerine repo köküne göre açık `path` ile yapılacak şekilde değiştirildi — npm workspace script'leri cwd'yi `app/`'a taşıdığı için önceki hâliyle `ENCRYPTION_KEY` hiç okunmuyordu (bu, aiProviders için de sorunluydu, şimdi ikisi de düzgün çalışıyor).
+6. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumun değişiklikleri henüz push edilmedi.
 
 ## Bilinen eksikler / ertelenen teknik notlar
 
@@ -44,8 +50,6 @@ DB: Neon Postgres (`neondb`), ilk migration (`20260918234541_init`) uygulanmış
 
 ## Sırada ne var (bir sonraki oturumda buradan devam)
 
-Kullanıcıya şu iki seçenek sunulmuştu, henüz karar verilmedi:
-- **MCP Entegrasyonları CRUD** (DESIGN.md 5.2, `mcp_integrations` tablosu) — AI Providers CRUD'a çok benzer bir yapı, hızlı ilerler.
-- **Kullanıcı/Skill/Role temel yapısı** (DESIGN.md 5.3-5.5) — auth'un ön koşulu, biraz daha kapsamlı.
-
-Öneri: MCP Entegrasyonları CRUD ile devam edip, admin panelinin veri-tanımlama tarafını bitirdikten sonra Kullanıcı/Skill/Role + auth'a geçmek (mantıksal sıra DESIGN.md Bölüm 5'teki liste sırasıyla örtüşüyor).
+MCP Entegrasyonları CRUD tamamlandı. Sırada:
+- **Kullanıcı/Skill/Role temel yapısı** (DESIGN.md 5.3-5.5) — auth'un ön koşulu; `users`, `skills`, `roles`, `user_skills`, `user_roles`, `role_mcp_permissions`, `role_ai_providers` tabloları için CRUD + ilişki yönetimi. Sonrasında auth (login/session) eklenebilir.
+- Bu oturumdaki commit'ler henüz `git push` edilmedi — bir sonraki oturumda önce `git status`/`git log` ile kontrol edip push'u tamamlamak gerekebilir.

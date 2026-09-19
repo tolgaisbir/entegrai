@@ -1,5 +1,12 @@
-import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import express, { type ErrorRequestHandler } from "express";
+
+// npm workspace script'leri cwd'yi paket dizinine (app/) ayarlar; .env repo kökünde
+// olduğundan burayı açıkça belirtiyoruz (bkz. PROGRESS.md "Nasıl çalıştırılır").
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 import { adminRouter } from "./routes/admin.js";
 import { chatRouter } from "./routes/chat.js";
 
