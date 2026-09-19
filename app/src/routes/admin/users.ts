@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { AuthSource, type User } from "@tegrai/db";
 import { prisma } from "../../lib/prisma.js";
 import { asyncHandler } from "../../lib/asyncHandler.js";
+import { ADMIN_ROLE_NAME } from "../../lib/constants.js";
 
 // DESIGN.md 5.3 — Kullanıcı Yönetimi: kullanıcı listesi (manuel ekleme), kullanıcıya
 // skill(ler) atama, kullanıcıya role(ler) atama.
@@ -120,6 +121,22 @@ usersRouter.delete(
   asyncHandler(async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: "not_found" });
+
+    const adminRole = await prisma.role.findUnique({ where: { name: ADMIN_ROLE_NAME } });
+    if (adminRole) {
+      const isAdmin = await prisma.userRole.findUnique({
+        where: { userId_roleId: { userId: req.params.id, roleId: adminRole.id } },
+      });
+      if (isAdmin) {
+        const otherAdminCount = await prisma.userRole.count({
+          where: { roleId: adminRole.id, userId: { not: req.params.id } },
+        });
+        if (otherAdminCount === 0) {
+          return res.status(400).json({ error: "cannot_delete_last_admin" });
+        }
+      }
+    }
+
     await prisma.user.delete({ where: { id: req.params.id } });
     res.status(204).send();
   }),
@@ -156,6 +173,21 @@ usersRouter.put(
     }
     const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ error: "not_found" });
+
+    const adminRole = await prisma.role.findUnique({ where: { name: ADMIN_ROLE_NAME } });
+    if (adminRole && !parsed.data.roleIds.includes(adminRole.id)) {
+      const currentlyAdmin = await prisma.userRole.findUnique({
+        where: { userId_roleId: { userId: req.params.id, roleId: adminRole.id } },
+      });
+      if (currentlyAdmin) {
+        const otherAdminCount = await prisma.userRole.count({
+          where: { roleId: adminRole.id, userId: { not: req.params.id } },
+        });
+        if (otherAdminCount === 0) {
+          return res.status(400).json({ error: "cannot_remove_last_admin" });
+        }
+      }
+    }
 
     await prisma.$transaction([
       prisma.userRole.deleteMany({ where: { userId: req.params.id } }),

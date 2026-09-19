@@ -55,20 +55,32 @@ DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `202609190822
    - `packages/db/prisma/seed.ts` (+ `npm run db:seed`) — `is_admin` sistem role'ünü ve varsayılan admin kullanıcısını (`admin@company.local`, rastgele geçici şifre, `mustChangePassword=true`) oluşturur, idempotent
    - Uçtan uca test edildi: token'sız `/api/admin/*` → 401; yanlış şifre → 401; doğru login → token + `mustChangePassword:true`; şifre değişmeden admin erişimi → 403 `must_change_password`; `change-password` sonrası admin erişimi → 200
    - LDAP login **henüz uygulanmadı** (bkz. aşağıdaki eksikler)
-8. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
+   - Yan güvenlik düzeltmesi: `PUT /api/admin/users/:id/roles` ve `DELETE /api/admin/users/:id`, son `is_admin` kullanıcısını kaldırmayı/silmeyi engelliyor (`cannot_remove_last_admin` / `cannot_delete_last_admin`) — testler sırasında admin'in tek rolünü değiştirip kendimi kilitleyerek keşfettim, doğrudan Prisma script'iyle DB'den düzeltip sonra bu korumayı ekledim.
+8. **Chat Bot temel akışı** (DESIGN.md Bölüm 6) — `app/src/routes/chat.ts` (tamamı `requireAuth()` ile korumalı)
+   - `GET /api/chat/skills` — kullanıcının atanmış skill'leri; `GET /api/chat/ai-providers` — kullanıcının role'leri üzerinden erişebildiği AI sağlayıcılar (`role_ai_providers` distinct)
+   - `POST /api/chat/sessions` — `skillId` kullanıcıya atanmış olmalı, `aiProviderId` verilmezse erişilebilir sağlayıcılardan (varsa `isActive`) otomatik seçilir
+   - `GET /api/chat/sessions` — kullanıcının oturumları, skill'e göre gruplanmış (sol frame için)
+   - `GET/PATCH/DELETE /api/chat/sessions/:id` — sahiplik kontrolü (başka kullanıcının oturumuna 404)
+   - `POST /api/chat/sessions/:id/messages` — kullanıcı mesajını kaydeder, ilk mesajsa `title`'ı otomatik doldurur, `app/src/lib/aiClient.ts` ile seçili sağlayıcıya (Anthropic Messages API / OpenAI Chat Completions) tüm geçmişle birlikte gerçek istek atar, yanıtı `assistant` mesajı olarak kaydeder; sağlayıcı hata dönerse kullanıcı mesajı korunur, `502 ai_provider_error` döner
+   - MCP tool çağrısı desteği (`role_mcp_permissions`/`get_filters` uygulanması) **henüz yok** — mcp-server dinamik tool yüklemesi tamamlanınca eklenecek
+   - Token/maliyet kaydı (`ai_usage_records`) **henüz yok** — Bütçe modülüyle (Bölüm 12) birlikte eklenecek
+   - Uçtan uca gerçek Anthropic API'sine karşı test edildi (sahte API key ile 401 → düzgün `502` hata sarmalama; session grouping/rename/delete/skill-yetkisi kontrolleri çalışıyor)
+9. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
 
 ## Bilinen eksikler / ertelenen teknik notlar
 
 - `packages/db/prisma/schema.prisma` içindeki `ai_usage_monthly_rollup` tablosunda bir yorum var: Postgres'te NULL `skill_id` değerleri unique kısıtlamayı düzgün uygulamıyor. Bütçe modülünü (Bölüm 12) kodlarken bir partial unique index (COALESCE ile) eklenerek düzeltilecek.
 - **LDAP login uygulanmadı** — `ldapjs` ile bind + login-time sync (DESIGN.md 8, karar 170) henüz yazılmadı; şu an sadece `authSource=local` kullanıcılar login olabiliyor, `ldap` kullanıcılar `POST /api/auth/login`'de 501 alır.
-- Chat bot tarafı (`/api/chat`) henüz `requireAuth()` ile korunmuyor — sadece admin API'leri korumalı; chat bot geliştirilirken eklenmeli.
+- **MCP tool çağrısı chat akışına henüz entegre değil** — chat bot şu an sadece düz metin AI sohbeti yapıyor, `mcp_integrations`/`role_mcp_permissions` üzerinden tool çağırma yok.
+- **Bütçe/kullanım takibi yok** — chat mesajlarında token/maliyet kaydı tutulmuyor (Bölüm 12 ile gelecek).
 - `mcp-server/` sadece boş bir MCP server iskeleti; dinamik tool yükleme (mcp_integrations tablosundan) ve şablon yönetim tool'ları (10.6) henüz yazılmadı.
-- Admin panelinin **frontend'i** (React) henüz yok — sadece backend API'leri var.
+- Admin panelinin **frontend'i** (React) henüz yok — sadece backend API'leri var. Chat bot arayüzü de yok.
+- `isActive=false` yapılan son admin kullanıcısı için bir koruma yok (sadece rol kaldırma/silme korunuyor) — düşük öncelikli, admin panelden dikkatli kullanım gerekiyor.
 
 ## Sırada ne var (bir sonraki oturumda buradan devam)
 
-Auth + Kullanıcı/Skill/Role CRUD tamamlandı — DESIGN.md Bölüm 5 ve 8'in backend'i (Bütçe/12.7 ve LDAP login hariç) bitti. Sırada, öncelik sırasına göre:
-- **Bütçe (Budget) Yönetimi** (DESIGN.md Bölüm 12) — `role_mcp_permissions`/`role_ai_providers`/auth artık var, bütçe modülü bunların üstüne kurulabilir; NULL `skill_id` unique kısıtlama düzeltmesi de bu sırada yapılmalı.
-- Ya da **Chat Bot temel akışı** (DESIGN.md Bölüm 6) — artık kullanıcı/skill/role/auth hazır olduğuna göre `chat_sessions`/`chat_messages` CRUD + AI provider'a gerçek istek atma başlanabilir; `requireAuth()` ile korunmalı.
+Auth + Kullanıcı/Skill/Role CRUD + Chat Bot temel akışı tamamlandı. Sırada, öncelik sırasına göre:
+- **Bütçe (Budget) Yönetimi** (DESIGN.md Bölüm 12) — artık chat mesajlaşması gerçek AI çağrısı yaptığına göre bunu token/maliyet takibiyle sarmalamanın tam zamanı; `ai_usage_records` + `ai_usage_monthly_rollup` (NULL `skill_id` unique kısıtlama düzeltmesiyle birlikte) + limit aşımı davranışı.
+- Ya da **MCP tool çağrısı entegrasyonu** — `mcp-server`'da dinamik tool yükleme + chat akışının bu tool'ları çağırabilmesi (role_mcp_permissions/get_filters uygulanması).
 - Ya da **LDAP login** — `ldapjs` ile bind + login-time sync.
 - Bu oturumdaki commit'ler henüz `git push` edilmedi — bir sonraki oturumda önce `git status`/`git log` ile kontrol edip push'u tamamlamak gerekebilir.
