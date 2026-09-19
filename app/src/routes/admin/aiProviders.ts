@@ -1,8 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AiProviderType, Prisma, type AiProvider } from "@tegrai/db";
+import { AiProviderType, Prisma, decryptSecret, encryptSecret, maskSecret, type AiProvider } from "@tegrai/db";
 import { prisma } from "../../lib/prisma.js";
-import { decryptSecret, encryptSecret, maskSecret } from "../../lib/crypto.js";
 import { asyncHandler } from "../../lib/asyncHandler.js";
 import { isForeignKeyRestrictError } from "../../lib/prismaErrors.js";
 

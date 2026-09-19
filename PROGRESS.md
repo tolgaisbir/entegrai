@@ -11,15 +11,17 @@ npm install
 # Ana uygulama (chat bot + admin API) — http://localhost:3000
 npm run dev:app
 
-# MCP server (ayrı servis, henüz minimal iskelet)
+# MCP server — internal HTTP API, sadece 127.0.0.1:3100'de dinler (bkz. DESIGN.md 8).
+# Chat akışında tool çağrısının çalışması için bu servisin de ayakta olması gerekir;
+# ayakta değilse chat.ts sessizce "tool yok" varsayıp düz metin sohbete devam eder.
 npm run dev:mcp
 ```
 
 **Gerekli `.env` dosyaları** (git'e dahil değil, `.env.example`'a bakın):
-- `/.env` — `DATABASE_URL` (Neon Postgres), `PORT`, `ENCRYPTION_KEY`, `JWT_SECRET`
+- `/.env` — `DATABASE_URL` (Neon Postgres), `PORT`, `ENCRYPTION_KEY`, `JWT_SECRET`, `MCP_PORT`, `MCP_INTERNAL_SECRET`
 - `/packages/db/.env` — sadece `DATABASE_URL` (Prisma CLI + seed script için)
 
-Bu iki dosya bu makinede zaten mevcut ve dolu. **Başka bir makineye geçilirse** yeniden oluşturulmaları gerekir — `ENCRYPTION_KEY` kaybolursa mevcut `ai_providers.apiKeyEncrypted`/`mcp_integrations.connection_config` şifreli alanları çözülemez hale gelir (yeniden şifrelemek gerekir); `JWT_SECRET` değişirse verilmiş tüm login token'ları geçersiz olur (zararsız, kullanıcılar tekrar login olur).
+Bu iki dosya bu makinede zaten mevcut ve dolu. **Başka bir makineye geçilirse** yeniden oluşturulmaları gerekir — `ENCRYPTION_KEY` kaybolursa mevcut `ai_providers.apiKeyEncrypted`/`mcp_integrations.connection_config` şifreli alanları çözülemez hale gelir (yeniden şifrelemek gerekir); `JWT_SECRET` değişirse verilmiş tüm login token'ları geçersiz olur (zararsız, kullanıcılar tekrar login olur); `MCP_INTERNAL_SECRET` app/ ile mcp-server/ arasında paylaşılan, sadece bu iki servisin birbirini kimliklendirmesi için kullanılan bir sır (dışa açık değil).
 
 DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `20260919082231_add_must_change_password`, `20260919102728_fix_rollup_null_skill_unique`) uygulanmış durumda.
 
@@ -28,16 +30,16 @@ DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `202609190822
 ## Şu ana kadar tamamlananlar
 
 1. **DESIGN.md** — tüm mimari/veri modeli tartışması ve kararları içeriyor (13 bölüm). Yeni bir talep geldiğinde önce oraya işlenir.
-2. **Proje iskeleti** — npm workspaces monorepo: `app/` (Express+TS), `mcp-server/` (MCP SDK+TS, minimal), `packages/db/` (Prisma şeması, DESIGN.md'deki tüm tablolar).
+2. **Proje iskeleti** — npm workspaces monorepo: `app/` (Express+TS), `mcp-server/` (Express+TS, internal HTTP API — bkz. madde 10), `packages/db/` (Prisma şeması, DESIGN.md'deki tüm tablolar, + paylaşılan `crypto`/`mcpConnectionConfig` yardımcıları).
 3. **AI Sağlayıcı Yönetimi CRUD** (DESIGN.md 5.1) — `app/src/routes/admin/aiProviders.ts`
    - `GET/POST /api/admin/ai-providers`, `GET/PATCH/DELETE /api/admin/ai-providers/:id`, `POST /:id/test`
-   - API key'ler AES-256-GCM ile şifreli (`app/src/lib/crypto.ts`), yanıtlarda sadece maskeli (`apiKeyPreview`) dönüyor
+   - API key'ler AES-256-GCM ile şifreli (`packages/db/src/crypto.ts` — sonradan mcp-server ile paylaşmak için buraya taşındı, bkz. madde 10), yanıtlarda sadece maskeli (`apiKeyPreview`) dönüyor
    - Anthropic/OpenAI için gerçek bağlantı testi; diğer provider tipleri için "desteklenmiyor" mesajı
    - Uçtan uca Neon DB'ye karşı test edildi (create/list/patch/test/delete)
 4. **Global hata yönetimi** — `app/src/lib/asyncHandler.ts` + `index.ts`'deki error handler middleware (Express 4'te yakalanmayan async hatalar artık process'i çökertmiyor, 500 JSON dönüyor).
 5. **MCP Entegrasyonları CRUD** (DESIGN.md 5.2) — `app/src/routes/admin/mcpIntegrations.ts`
    - `GET/POST /api/admin/mcp-integrations`, `GET/PATCH/DELETE /api/admin/mcp-integrations/:id`, `POST /:id/test`
-   - `connection_config` (JSONB) içindeki hassas alanlar (adında `key`/`password`/`secret`/`token`/`connectionString` geçenler) AES-256-GCM ile şifrelenip DB'ye yazılıyor, yanıtlarda maskeli dönüyor (aiProviders'daki `apiKeyPreview` deseninin JSON'a genellenmiş hali)
+   - `connection_config` (JSONB) içindeki hassas alanlar (adında `key`/`password`/`secret`/`token`/`connectionString` geçenler) AES-256-GCM ile şifrelenip DB'ye yazılıyor, yanıtlarda maskeli dönüyor (aiProviders'daki `apiKeyPreview` deseninin JSON'a genellenmiş hali; mantık sonradan `packages/db/src/mcpConnectionConfig.ts`'e taşındı, bkz. madde 10)
    - `http_api` tipi için `baseUrl`/`url` + opsiyonel `apiKey`/`token` ile gerçek bağlantı testi; diğer tipler için "desteklenmiyor" mesajı
    - Uçtan uca Neon DB'ye karşı test edildi (create/list/patch/test/delete)
    - Yan düzeltme: `app/src/index.ts`'de `.env` yükleme, `dotenv/config` yerine repo köküne göre açık `path` ile yapılacak şekilde değiştirildi — npm workspace script'leri cwd'yi `app/`'a taşıdığı için önceki hâliyle `ENCRYPTION_KEY` hiç okunmuyordu (bu, aiProviders için de sorunluydu, şimdi ikisi de düzgün çalışıyor). Not: proje CommonJS'e derleniyor (package.json'da `"type":"module"` yok) — `import.meta` kullanılamaz, `__dirname` global olarak zaten mevcut.
@@ -61,9 +63,7 @@ DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `202609190822
    - `POST /api/chat/sessions` — `skillId` kullanıcıya atanmış olmalı, `aiProviderId` verilmezse erişilebilir sağlayıcılardan (varsa `isActive`) otomatik seçilir
    - `GET /api/chat/sessions` — kullanıcının oturumları, skill'e göre gruplanmış (sol frame için)
    - `GET/PATCH/DELETE /api/chat/sessions/:id` — sahiplik kontrolü (başka kullanıcının oturumuna 404)
-   - `POST /api/chat/sessions/:id/messages` — kullanıcı mesajını kaydeder, ilk mesajsa `title`'ı otomatik doldurur, `app/src/lib/aiClient.ts` ile seçili sağlayıcıya (Anthropic Messages API / OpenAI Chat Completions) tüm geçmişle birlikte gerçek istek atar, yanıtı `assistant` mesajı olarak kaydeder; sağlayıcı hata dönerse kullanıcı mesajı korunur, `502 ai_provider_error` döner
-   - MCP tool çağrısı desteği (`role_mcp_permissions`/`get_filters` uygulanması) **henüz yok** — mcp-server dinamik tool yüklemesi tamamlanınca eklenecek
-   - Token/maliyet kaydı (`ai_usage_records`) **henüz yok** — Bütçe modülüyle (Bölüm 12) birlikte eklenecek
+   - `POST /api/chat/sessions/:id/messages` — kullanıcı mesajını kaydeder, ilk mesajsa `title`'ı otomatik doldurur, `app/src/lib/aiClient.ts` ile seçili sağlayıcıya (Anthropic Messages API / OpenAI Chat Completions) tüm geçmişle birlikte gerçek istek atar, yanıtı `assistant` mesajı olarak kaydeder; sağlayıcı hata dönerse kullanıcı mesajı korunur, `502 ai_provider_error` döner; tool çağrısı gerekiyorsa max 5 turluk döngü çalışır (bkz. madde 10; token/maliyet kaydı madde 9'da)
    - Uçtan uca gerçek Anthropic API'sine karşı test edildi (sahte API key ile 401 → düzgün `502` hata sarmalama; session grouping/rename/delete/skill-yetkisi kontrolleri çalışıyor)
 9. **Bütçe (Budget) Yönetimi** (DESIGN.md Bölüm 12) —
    - `packages/db/prisma/migrations/20260919102728_fix_rollup_null_skill_unique` — bilinen tech-debt'i kapattı: `ai_usage_monthly_rollup`'taki normal `@@unique` (skill_id dahil), Postgres'te NULL'ları farklı saydığından skill'siz kullanım satırlarını tekilleştiremiyordu. Düzeltme, biri `skill_id IS NULL` diğeri `skill_id IS NOT NULL` için olmak üzere iki **partial unique index** ekliyor (Prisma şema dili partial index ifade edemediğinden schema.prisma'da temsil edilmiyor, sadece sorgu için normal bir `@@index` bırakıldı)
@@ -74,23 +74,32 @@ DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `202609190822
    - `app/src/routes/admin/budgetPolicies.ts` (`/api/admin/budget-policies`) — CRUD + scope validasyonu (skill/user scope_id'nin gerçekten var olduğu kontrol edilir; `global` scope Postgres'te NULL scope_id yüzünden DB unique'i tarafından korunmadığından tekrarlar uygulama katmanında engelleniyor) + `GET /usage-overview?aiProviderId=` (DESIGN.md 12.7 — provider'a erişimi olan her kullanıcı için, atanmış her skill'de etkin limit/kullanım/kalan/kaynak)
    - Yan sağlamlaştırma: `DELETE /api/admin/ai-providers/:id` ve `DELETE /api/admin/skills/:id`, kullanım geçmişi (RESTRICT FK) yüzünden düz bir 500 fırlatıyordu — testte yakalandı, artık `app/src/lib/prismaErrors.ts`'teki `isForeignKeyRestrictError` ile tespit edilip düzgün `409` dönüyor (not: bu ihlal Prisma'da `P2003` değil, `.code`'suz bir `PrismaClientUnknownRequestError` olarak geliyor — mesaj içeriğine bakmak gerekti)
    - Uçtan uca Neon DB'ye karşı test edildi: policy CRUD + duplicate/scope validasyonu, `GET /ai-providers?skillId=`/`GET /sessions/:id` bütçe alanı, rollup upsert'in hem skill'li hem skill'siz (partial index) yolda doğru topladığı (aynı satırı iki kez arttırıp tekilliği doğrulayarak), gerçek bir aşım senaryosunda mesajın engellenip hiç persist edilmediği, usage-overview, ve FK-409 düzeltmesi
-10. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
+10. **MCP tool çağrısı entegrasyonu** (DESIGN.md Bölüm 9, karar: bkz. Bölüm 8 "MCP Server internal HTTP API") —
+    - **Mimari sapma (bilinçli)**: `mcp-server/` artık resmi MCP SDK'nın stdio/HTTP transport'unu kullanmıyor; bunun yerine sadece `127.0.0.1`'e bind olan, `x-internal-secret` header'ıyla korunan düz bir Express JSON API (`GET /tools?userId=`, `POST /tools/call`). Gerekçe: SDK'nın transport'u tekil istemci/oturum varsayıyor, bizim tek tüketicimiz (app/'nin chat akışı) ve multi-user + role bazlı yetkilendirme ihtiyacımız var. `@modelcontextprotocol/sdk` bağımlılığı ileride harici istemci desteği için projede duruyor, kullanılmıyor. Detay: DESIGN.md 7/8.
+    - Paylaşılan kod: `app/src/lib/crypto.ts` → `packages/db/src/crypto.ts`'e taşındı; yeni `packages/db/src/mcpConnectionConfig.ts` (encrypt/mask/read connection_config), her ikisi `@tegrai/db`'den export ediliyor — hem app/ hem mcp-server/ aynı `ENCRYPTION_KEY` ile şifreleyip çözebiliyor. `app/src/routes/admin/{aiProviders,mcpIntegrations}.ts` bu paylaşılan yardımcıları kullanacak şekilde güncellendi (davranış aynı, sadece kod tekilleşti).
+    - `mcp-server/src/toolProvider.ts` — **sadece `http_api`** tipi, `isEnabled=true` entegrasyonlar desteklenir (database/file_share/smtp_mail/internal_tool listeye hiç girmez). Her entegrasyon, AI'ye tek genel bir "HTTP çağrısı yap" tool'u olarak sunulur (`{method, path, query, body}` — admin panelindeki serbest `tool_schema` alanı şu an kullanılmıyor). Kullanıcının role'lerinden gelen `role_mcp_permissions.allowedOperations` (izinli HTTP metodları, union) ve `getFilters` (AI'nin query'sini **ezen** zorunlu parametreler, merge) uygulanır.
+    - `mcp-server/src/index.ts` — Express app, `MCP_PORT` (varsayılan 3100), `MCP_INTERNAL_SECRET` ile korunuyor.
+    - `app/src/lib/mcpClient.ts` — chat.ts'in mcp-server'a bağlanan ince istemcisi; mcp-server'a ulaşılamazsa (henüz başlamamış, ağ hatası) hatayı yutup boş tool listesi döner — chat bot tool'suz, düz metin modunda çalışmaya devam eder.
+    - `app/src/lib/aiClient.ts` yeniden yazıldı — `ChatTurn` yerine `HistoryMessage` (role user/assistant/tool + toolCallData), `generateReply` artık `tools: ToolSpec[]` alıyor ve `GenerateTurnResult` (`content`, `toolCalls`, token sayıları) dönüyor. Anthropic tarafında `tool_use`/`tool_result` blokları doğru inşa ediliyor (ardışık `tool` mesajları tek bir `user` turuna gruplanıyor); OpenAI tarafında `tool_calls`/`role:"tool"` formatı kullanılıyor.
+    - `app/src/routes/chat.ts`'teki mesaj handler'ı bir **döngüye** dönüştürüldü (max 5 tur): her turda `generateReply` çağrılır, `assistant` mesajı (varsa `toolCallData` ile) kaydedilir; `toolCalls` varsa her biri `mcpClient.callTool` ile çalıştırılır ve sonuç `role:"tool"` mesajı olarak kaydedilip bir sonraki tura eklenir; `toolCalls` boşsa o turun içeriği nihai yanıt olur. Bütçe kontrolü hâlâ döngü başlamadan **önce** tek seferde yapılıyor (tool turları bütçeden düşülmüyor, sadece tüm turların token toplamı tek bir `recordUsage` çağrısıyla kaydediliyor — DESIGN.md 12.5 ile tutarlı). Yanıt şekli değişti: `{userMessage, assistantMessage}` yerine `{userMessage, messages: [...]}` (döngüdeki tüm assistant+tool mesajları).
+    - **Test kapsamı ve sınırı**: `mcp-server`'ın `/tools` ve `/tools/call`'ı gerçek bir httpbin.org entegrasyonuna karşı uçtan uca test edildi (izinli/izinsiz metod, `getFilters`'ın AI'nin query'sini ezdiği, bilinmeyen tool, rolsüz kullanıcı — hepsi doğru). `aiClient.ts`'in Anthropic/OpenAI istek gövdesi üretimi, `fetch` mock'lanarak (gerçek ağ çağrısı yapmadan) doğrulandı — `tool_use`/`tool_result` grup laması ve OpenAI `tool_calls`/`role:tool` formatı doğru. **Gerçek bir API key ile modelin fiilen tool_use döndürüp döngünün uçtan uca çalıştığı doğrulanmadı** (elimde gerçek Anthropic/OpenAI key yok) — sadece regresyon testi yapıldı (tools mevcutken sahte key ile 502 hatası, öncekiyle aynı şekilde düzgün dönüyor).
+11. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
 
 ## Bilinen eksikler / ertelenen teknik notlar
 
 - **LDAP login uygulanmadı** — `ldapjs` ile bind + login-time sync (DESIGN.md 8, karar 170) henüz yazılmadı; şu an sadece `authSource=local` kullanıcılar login olabiliyor, `ldap` kullanıcılar `POST /api/auth/login`'de 501 alır.
-- **MCP tool çağrısı chat akışına henüz entegre değil** — chat bot şu an sadece düz metin AI sohbeti yapıyor, `mcp_integrations`/`role_mcp_permissions` üzerinden tool çağırma yok. Bütçe modülündeki "MCP tabanlı deterministik adımlar bütçeden etkilenmez" kuralı (12.5) henüz uygulanacak bir şey yok çünkü MCP çağrısı yok.
-- Şablon (`templates`, Bölüm 10) hiç yazılmadı — `template_ai_transform` kaynaklı `ai_usage_records` şu an teorik, hiç üretilmiyor.
-- `mcp-server/` sadece boş bir MCP server iskeleti; dinamik tool yükleme (mcp_integrations tablosundan) ve şablon yönetim tool'ları (10.6) henüz yazılmadı.
+- **MCP tool çağrısı sadece `http_api` tipini destekliyor** — `database`/`file_share`/`smtp_mail`/`internal_tool` entegrasyonları hiç tool olarak sunulmuyor (bkz. madde 10). `smtp_mail` için DESIGN.md 9.1'deki ekstra onay/audit-log gereksinimleri de henüz yok.
+- **Gerçek bir API key ile tool-calling döngüsü hiç uçtan uca çalıştırılmadı** — sadece mock/regresyon testleri yapıldı (bkz. madde 10 sonu). Bir sonraki oturumda gerçek bir Anthropic/OpenAI key varsa öncelikle bu doğrulanmalı.
+- Şablon (`templates`, Bölüm 10) hiç yazılmadı — `template_ai_transform` kaynaklı `ai_usage_records` şu an teorik, hiç üretilmiyor. `template.create_from_session` gibi MCP üzerinden şablon oluşturma tool'ları (10.6) da yok.
 - Admin panelinin **frontend'i** (React) henüz yok — sadece backend API'leri var. Chat bot arayüzü de yok.
 - `isActive=false` yapılan son admin kullanıcısı için bir koruma yok (sadece rol kaldırma/silme korunuyor) — düşük öncelikli, admin panelden dikkatli kullanım gerekiyor.
-- `mcp-integrations`/`roles` silme uçlarında aynı FK-409 sağlamlaştırması yapılmadı (aiProviders/skills'te yapıldı) — şu an bu tablolara bağımlı veri üreten bir akış (template/mcp tool çağrısı) olmadığından pratikte tetiklenmiyor, ama template/MCP entegrasyonu yazılırken aynı `isForeignKeyRestrictError` deseniyle eklenmeli.
+- `mcp-integrations`/`roles` silme uçlarında aynı FK-409 sağlamlaştırması yapılmadı (aiProviders/skills'te yapıldı) — artık mcp_integrations'a bağımlı gerçek veri (role_mcp_permissions zaten cascade, ama ileride mail_send_logs/template_steps RESTRICT olabilir) üretilebileceğinden, bu tabloya dokunan bir sonraki özellik bu deseni de eklemeli.
 
 ## Sırada ne var (bir sonraki oturumda buradan devam)
 
-Auth + Kullanıcı/Skill/Role CRUD + Chat Bot temel akışı + Bütçe Yönetimi tamamlandı — DESIGN.md Bölüm 5, 6, 8 ve 12'nin backend'i bitti. Sırada, öncelik sırasına göre:
-- **MCP tool çağrısı entegrasyonu** — `mcp-server`'da dinamik tool yükleme + chat akışının bu tool'ları çağırabilmesi (role_mcp_permissions/get_filters uygulanması); bu olmadan Bölüm 9'daki entegrasyon tipleri (`http_api`, `database`, `smtp_mail` vb.) fiilen kullanılamıyor.
-- Ya da **LDAP login** — `ldapjs` ile bind + login-time sync.
-- Ya da **Şablonlar (Template)** (DESIGN.md Bölüm 10) — MCP tool çağrısına bağımlı, muhtemelen ondan sonra gelmeli.
+Auth + Kullanıcı/Skill/Role CRUD + Chat Bot temel akışı + Bütçe Yönetimi + MCP tool çağrısı (http_api) tamamlandı. Sırada, öncelik sırasına göre:
+- **Gerçek bir API key ile tool-calling'i doğrulama** — eğer kullanıcı bir Anthropic/OpenAI key sağlarsa, önce bunu yapmak mantıklı (bkz. yukarıdaki bilinen eksik).
+- **LDAP login** — `ldapjs` ile bind + login-time sync.
+- **Şablonlar (Template)** (DESIGN.md Bölüm 10) — MCP tool çağrısı artık var, üzerine kurulabilir.
 - Admin panel/chat bot **frontend'i (React)** henüz hiç başlanmadı — backend'in büyük kısmı bittiğine göre bir noktada gündeme gelmeli.
 - Bu oturumdaki commit'ler henüz `git push` edilmedi — bir sonraki oturumda önce `git status`/`git log` ile kontrol edip push'u tamamlamak gerekebilir.

@@ -1,21 +1,27 @@
 import { Router } from "express";
 import { z } from "zod";
-import { AiUsageSource, ChatMessageRole } from "@tegrai/db";
+import { AiUsageSource, ChatMessageRole, decryptSecret, Prisma } from "@tegrai/db";
 import { prisma } from "../lib/prisma.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
-import { decryptSecret } from "../lib/crypto.js";
-import { generateReply, type ChatTurn } from "../lib/aiClient.js";
+import { generateReply, type HistoryMessage } from "../lib/aiClient.js";
+import { listToolsForUser, callTool } from "../lib/mcpClient.js";
 import { requireAuth } from "../middleware/auth.js";
 import { calculateCostUsd, getBudgetStatuses, isBudgetExceeded, recordUsage } from "../lib/budget.js";
 
 // DESIGN.md Bölüm 6 — Chat Bot Deneyimi: skill seçimi, sol frame'de skill'e göre
 // gruplanmış chat geçmişi, mesaj gönderme + seçili AI sağlayıcıdan yanıt alma.
 // DESIGN.md Bölüm 12 — Bütçe: mesaj göndermeden önce kontrol edilir, başarılı yanıttan
-// sonra token/maliyet kaydedilir (bkz. lib/budget.ts).
+// sonra (döngüdeki tüm AI çağrılarının toplamı için) token/maliyet kaydedilir (bkz.
+// lib/budget.ts). DESIGN.md 12.5 — MCP tabanlı tool çağrıları bütçeden etkilenmez,
+// sadece gerçek AI isteği yapan turlar sayılır.
 //
-// MCP tool çağrısı desteği (role_mcp_permissions/get_filters uygulanması) henüz yok —
-// mcp-server dinamik tool yüklemesi tamamlanınca eklenecek (bkz. PROGRESS.md).
+// MCP tool çağrısı — kullanıcının role'lerine göre erişebildiği tool'lar mcp-server'dan
+// (bkz. lib/mcpClient.ts) alınır, AI tool_use isterse çağrılır, sonuç modele geri
+// verilir (max ~5 tur); role_mcp_permissions/get_filters uygulaması mcp-server
+// tarafında yapılır (bkz. mcp-server/src/toolProvider.ts).
 // DESIGN.md Bölüm 10 — Şablon (Template) tetikleme/izleme uç noktaları — TODO
+
+const MAX_TOOL_ITERATIONS = 5;
 
 export const chatRouter = Router();
 
@@ -244,26 +250,84 @@ chatRouter.post(
       });
     }
 
-    const history: ChatTurn[] = [...session.messages, userMessage]
-      .filter((m) => m.role === ChatMessageRole.user || m.role === ChatMessageRole.assistant)
-      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+    const history: HistoryMessage[] = [...session.messages, userMessage].map((m) => ({
+      role: m.role as "user" | "assistant" | "tool",
+      content: m.content,
+      toolCallData: m.toolCallData ?? undefined,
+    }));
 
-    let assistantMessage;
+    const tools = await listToolsForUser(req.user!.id);
+    const newMessages = [];
+    let totalTokensPrompt = 0;
+    let totalTokensCompletion = 0;
+    let finalAssistantMessage;
+
     try {
       const apiKey = decryptSecret(session.aiProvider.apiKeyEncrypted);
-      const reply = await generateReply(session.aiProvider, apiKey, history);
-      assistantMessage = await prisma.chatMessage.create({
-        data: { sessionId: session.id, role: ChatMessageRole.assistant, content: reply.content },
-      });
+
+      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+        const reply = await generateReply(session.aiProvider, apiKey, history, tools);
+        totalTokensPrompt += reply.tokensPrompt;
+        totalTokensCompletion += reply.tokensCompletion;
+
+        const assistantMessage = await prisma.chatMessage.create({
+          data: {
+            sessionId: session.id,
+            role: ChatMessageRole.assistant,
+            content: reply.content,
+            toolCallData: reply.toolCalls.length
+              ? (reply.toolCalls as unknown as Prisma.InputJsonValue)
+              : undefined,
+          },
+        });
+        newMessages.push(assistantMessage);
+        history.push({ role: "assistant", content: reply.content, toolCallData: assistantMessage.toolCallData ?? undefined });
+
+        if (reply.toolCalls.length === 0) {
+          finalAssistantMessage = assistantMessage;
+          break;
+        }
+
+        for (const call of reply.toolCalls) {
+          const result = await callTool(req.user!.id, call.name, call.input);
+          const resultText = JSON.stringify(result);
+          const toolMessage = await prisma.chatMessage.create({
+            data: {
+              sessionId: session.id,
+              role: ChatMessageRole.tool,
+              content: resultText,
+              toolCallData: { toolUseId: call.id, name: call.name } as Prisma.InputJsonValue,
+            },
+          });
+          newMessages.push(toolMessage);
+          history.push({
+            role: "tool",
+            content: resultText,
+            toolCallData: toolMessage.toolCallData ?? undefined,
+          });
+        }
+      }
+
+      if (!finalAssistantMessage) {
+        finalAssistantMessage = await prisma.chatMessage.create({
+          data: {
+            sessionId: session.id,
+            role: ChatMessageRole.assistant,
+            content: "Çok fazla araç çağrısı gerekti, işlem tamamlanamadı.",
+          },
+        });
+        newMessages.push(finalAssistantMessage);
+      }
+
       await recordUsage({
         userId: req.user!.id,
         aiProviderId: session.aiProviderId,
         skillId: session.skillId,
         source: AiUsageSource.chat,
-        referenceId: assistantMessage.id,
-        tokensPrompt: reply.tokensPrompt,
-        tokensCompletion: reply.tokensCompletion,
-        costUsd: calculateCostUsd(session.aiProvider, reply.tokensPrompt, reply.tokensCompletion),
+        referenceId: finalAssistantMessage.id,
+        tokensPrompt: totalTokensPrompt,
+        tokensCompletion: totalTokensCompletion,
+        costUsd: calculateCostUsd(session.aiProvider, totalTokensPrompt, totalTokensCompletion),
       });
     } catch (err) {
       await prisma.chatSession.update({
@@ -278,6 +342,6 @@ chatRouter.post(
     }
 
     await prisma.chatSession.update({ where: { id: session.id }, data: { updatedAt: new Date() } });
-    res.status(201).json({ userMessage, assistantMessage });
+    res.status(201).json({ userMessage, messages: newMessages });
   }),
 );

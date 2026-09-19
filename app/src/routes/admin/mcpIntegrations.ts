@@ -1,12 +1,19 @@
 import { Router } from "express";
 import { z } from "zod";
-import { McpIntegrationType, Prisma, type McpIntegration } from "@tegrai/db";
+import {
+  McpIntegrationType,
+  type McpIntegration,
+  type Prisma,
+  encryptConnectionConfig,
+  maskConnectionConfig,
+  readConnectionConfigValue,
+} from "@tegrai/db";
 import { prisma } from "../../lib/prisma.js";
-import { decryptSecret, encryptSecret, maskSecret } from "../../lib/crypto.js";
 import { asyncHandler } from "../../lib/asyncHandler.js";
 
 // DESIGN.md 5.2 / 9 — MCP Entegrasyonları: entegrasyon listesi (CRUD),
-// bağlantı bilgisi/auth formu (connection_config içindeki hassas alanlar şifreli),
+// bağlantı bilgisi/auth formu (connection_config içindeki hassas alanlar şifreli —
+// bkz. packages/db/src/mcpConnectionConfig.ts, mcp-server ile paylaşılan tek kaynak),
 // tool şeması düzenleme, aktif/pasif toggle, bağlantı testi.
 
 export const mcpIntegrationsRouter = Router();
@@ -29,48 +36,8 @@ const updateSchema = z.object({
   isEnabled: z.boolean().optional(),
 });
 
-// connection_config içinde adı bu anahtar kelimelerden birini içeren alanlar
-// hassas kabul edilir ve DB'ye şifreli yazılır (ör. apiKey, password, connectionString, secret, token).
-const SENSITIVE_KEY_HINTS = ["key", "password", "secret", "token", "connectionstring"];
-const ENC_PREFIX = "enc:";
-
-function isSensitiveKey(key: string): boolean {
-  const lower = key.toLowerCase();
-  return SENSITIVE_KEY_HINTS.some((hint) => lower.includes(hint));
-}
-
-function encryptConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(config)) {
-    if (isSensitiveKey(key) && typeof value === "string" && value.length > 0) {
-      result[key] = `${ENC_PREFIX}${encryptSecret(value)}`;
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
-// GET yanıtlarında hassas alanlar asla düz metin dönmez, sadece maskeli önizleme gösterilir.
-function maskConfig(config: Prisma.JsonValue): Record<string, unknown> {
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return {};
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
-    if (isSensitiveKey(key) && typeof value === "string" && value.startsWith(ENC_PREFIX)) {
-      try {
-        result[key] = maskSecret(decryptSecret(value.slice(ENC_PREFIX.length)));
-      } catch {
-        result[key] = "****";
-      }
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
 function serialize(integration: McpIntegration) {
-  return { ...integration, connectionConfig: maskConfig(integration.connectionConfig) };
+  return { ...integration, connectionConfig: maskConnectionConfig(integration.connectionConfig) };
 }
 
 mcpIntegrationsRouter.get(
@@ -101,7 +68,7 @@ mcpIntegrationsRouter.post(
     const integration = await prisma.mcpIntegration.create({
       data: {
         ...data,
-        connectionConfig: encryptConfig(connectionConfig) as Prisma.InputJsonValue,
+        connectionConfig: encryptConnectionConfig(connectionConfig) as Prisma.InputJsonValue,
         toolSchema: (toolSchema ?? {}) as Prisma.InputJsonValue,
       },
     });
@@ -125,7 +92,7 @@ mcpIntegrationsRouter.patch(
       data: {
         ...data,
         ...(connectionConfig
-          ? { connectionConfig: encryptConfig(connectionConfig) as Prisma.InputJsonValue }
+          ? { connectionConfig: encryptConnectionConfig(connectionConfig) as Prisma.InputJsonValue }
           : {}),
         ...(toolSchema ? { toolSchema: toolSchema as Prisma.InputJsonValue } : {}),
       },
@@ -154,31 +121,19 @@ mcpIntegrationsRouter.post(
   }),
 );
 
-function decryptConfigValue(config: Prisma.JsonValue, key: string): string | undefined {
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return undefined;
-  const value = (config as Record<string, unknown>)[key];
-  if (typeof value !== "string") return undefined;
-  if (value.startsWith(ENC_PREFIX)) {
-    try {
-      return decryptSecret(value.slice(ENC_PREFIX.length));
-    } catch {
-      return undefined;
-    }
-  }
-  return value;
-}
-
 async function testConnection(
   integration: McpIntegration,
 ): Promise<{ ok: boolean; message: string }> {
   try {
     if (integration.type === McpIntegrationType.http_api) {
       const config = integration.connectionConfig;
-      const baseUrl = decryptConfigValue(config, "baseUrl") ?? decryptConfigValue(config, "url");
+      const baseUrl =
+        readConnectionConfigValue(config, "baseUrl") ?? readConnectionConfigValue(config, "url");
       if (!baseUrl) {
         return { ok: false, message: "connection_config içinde 'baseUrl' veya 'url' tanımlı değil" };
       }
-      const authToken = decryptConfigValue(config, "apiKey") ?? decryptConfigValue(config, "token");
+      const authToken =
+        readConnectionConfigValue(config, "apiKey") ?? readConnectionConfigValue(config, "token");
       const resp = await fetch(baseUrl, {
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
       });

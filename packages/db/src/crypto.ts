@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-// DESIGN.md 4.1 / 7 — API key'ler DB'de şifreli tutulur (AES-256-GCM).
-// ENCRYPTION_KEY: 32 byte'lık hex string (64 karakter).
+// DESIGN.md 4.1 / 7 — API key'ler ve mcp_integrations.connection_config'teki hassas
+// alanlar DB'de şifreli tutulur (AES-256-GCM). ENCRYPTION_KEY: 32 byte'lık hex string
+// (64 karakter). Hem app/ hem mcp-server/ bu paketten import eder, aynı anahtarla
+// şifreleyip çözebilmeleri için.
 
 function getKey(): Buffer {
   const hex = process.env.ENCRYPTION_KEY;
