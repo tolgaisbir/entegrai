@@ -4,8 +4,12 @@ import { mcpIntegrationsRouter } from "./admin/mcpIntegrations.js";
 import { usersRouter } from "./admin/users.js";
 import { skillsRouter } from "./admin/skills.js";
 import { rolesRouter } from "./admin/roles.js";
+import { requireAdmin } from "../middleware/auth.js";
 
 export const adminRouter = Router();
+
+// DESIGN.md 8 — Admin paneli tamamen is_admin role'üne sahip kullanıcılara kapalı.
+adminRouter.use(requireAdmin());
 
 // DESIGN.md 5.1 — AI Ayarları
 adminRouter.use("/ai-providers", aiProvidersRouter);

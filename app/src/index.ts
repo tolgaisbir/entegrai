@@ -8,6 +8,7 @@ import express, { type ErrorRequestHandler } from "express";
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 import { adminRouter } from "./routes/admin.js";
 import { chatRouter } from "./routes/chat.js";
+import { authRouter } from "./routes/auth.js";
 
 const app = express();
 app.use(express.json());
@@ -15,6 +16,9 @@ app.use(express.json());
 app.get("/health", (_req, res) => {
   res.json({ status: "ok" });
 });
+
+// bkz. DESIGN.md Bölüm 8 — Auth mekanizması
+app.use("/api/auth", authRouter);
 
 // bkz. DESIGN.md Bölüm 5 — Admin Panel Ekranları
 app.use("/api/admin", adminRouter);

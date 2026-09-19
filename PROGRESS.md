@@ -16,12 +16,14 @@ npm run dev:mcp
 ```
 
 **Gerekli `.env` dosyaları** (git'e dahil değil, `.env.example`'a bakın):
-- `/.env` — `DATABASE_URL` (Neon Postgres), `PORT`, `ENCRYPTION_KEY`
-- `/packages/db/.env` — sadece `DATABASE_URL` (Prisma CLI için)
+- `/.env` — `DATABASE_URL` (Neon Postgres), `PORT`, `ENCRYPTION_KEY`, `JWT_SECRET`
+- `/packages/db/.env` — sadece `DATABASE_URL` (Prisma CLI + seed script için)
 
-Bu iki dosya bu makinede zaten mevcut ve dolu. **Başka bir makineye geçilirse** yeniden oluşturulmaları gerekir — `ENCRYPTION_KEY` kaybolursa mevcut `ai_providers.apiKeyEncrypted` alanları çözülemez hale gelir (yeniden şifrelemek gerekir).
+Bu iki dosya bu makinede zaten mevcut ve dolu. **Başka bir makineye geçilirse** yeniden oluşturulmaları gerekir — `ENCRYPTION_KEY` kaybolursa mevcut `ai_providers.apiKeyEncrypted`/`mcp_integrations.connection_config` şifreli alanları çözülemez hale gelir (yeniden şifrelemek gerekir); `JWT_SECRET` değişirse verilmiş tüm login token'ları geçersiz olur (zararsız, kullanıcılar tekrar login olur).
 
-DB: Neon Postgres (`neondb`), ilk migration (`20260918234541_init`) uygulanmış durumda.
+DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `20260919082231_add_must_change_password`) uygulanmış durumda.
+
+**İlk kurulum / varsayılan admin**: `npm run db:seed` — `is_admin` sistem role'ünü ve `admin@company.local` kullanıcısını (geçici şifre konsola basılır, `mustChangePassword=true`) oluşturur. Zaten varsa dokunmaz. Bu makinede zaten çalıştırıldı; admin şifresi test sırasında `newpassword123` olarak değiştirildi (sadece bu dev DB'de, gerçek ortamda olmaz).
 
 ## Şu ana kadar tamamlananlar
 
@@ -44,19 +46,29 @@ DB: Neon Postgres (`neondb`), ilk migration (`20260918234541_init`) uygulanmış
    - `app/src/routes/admin/roles.ts` — Role CRUD + `PUT /:id/mcp-permissions` ve `PUT /:id/ai-providers` (replace semantics, `role_mcp_permissions`/`role_ai_providers` n:n tablolarını yönetir); `isSystem=true` role'lerin silinmesi engellendi
    - `app/src/routes/admin/users.ts` — User CRUD; local kullanıcılarda şifre `bcryptjs` (12 round) ile hashleniyor, yanıtlarda `passwordHash` asla dönmüyor; `authSource=local` için `password`, `ldap` için `ldapDn` zorunlu (zod `superRefine`); `PUT /:id/skills` ve `PUT /:id/roles` ile atama (replace semantics)
    - Hepsi `/api/admin/{skills,roles,users}` altında mount edildi, uçtan uca Neon DB'ye karşı test edildi (skill/role/kullanıcı oluşturma, role'e mcp-permission + ai-provider atama, kullanıcıya skill+role atama, cascade delete)
-7. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
+7. **Auth** (DESIGN.md 8) —
+   - `users.mustChangePassword` alanı eklendi (migration `20260919082231_add_must_change_password`)
+   - `app/src/lib/jwt.ts` — `signAuthToken`/`verifyAuthToken` (HS256, 12 saat geçerli, `JWT_SECRET` ile)
+   - `app/src/middleware/auth.ts` — `requireAuth()` (herhangi bir login olmuş kullanıcı) ve `requireAdmin()` (+ `is_admin` role kontrolü + `mustChangePassword` engeli), `req.user` tipini genişletir
+   - `app/src/routes/auth.ts` — `POST /api/auth/login` (email+password, sadece `authSource=local`; `ldap` için 501 döner), `GET /api/auth/me`, `POST /api/auth/change-password` (mevcut şifre doğrulanır, `mustChangePassword` sıfırlanır)
+   - `app/src/routes/admin.ts`'e `adminRouter.use(requireAdmin())` eklendi — tüm `/api/admin/*` artık `is_admin` role'üne sahip, aktif, şifresini değiştirmiş bir kullanıcı gerektiriyor
+   - `packages/db/prisma/seed.ts` (+ `npm run db:seed`) — `is_admin` sistem role'ünü ve varsayılan admin kullanıcısını (`admin@company.local`, rastgele geçici şifre, `mustChangePassword=true`) oluşturur, idempotent
+   - Uçtan uca test edildi: token'sız `/api/admin/*` → 401; yanlış şifre → 401; doğru login → token + `mustChangePassword:true`; şifre değişmeden admin erişimi → 403 `must_change_password`; `change-password` sonrası admin erişimi → 200
+   - LDAP login **henüz uygulanmadı** (bkz. aşağıdaki eksikler)
+8. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
 
 ## Bilinen eksikler / ertelenen teknik notlar
 
 - `packages/db/prisma/schema.prisma` içindeki `ai_usage_monthly_rollup` tablosunda bir yorum var: Postgres'te NULL `skill_id` değerleri unique kısıtlamayı düzgün uygulamıyor. Bütçe modülünü (Bölüm 12) kodlarken bir partial unique index (COALESCE ile) eklenerek düzeltilecek.
-- Henüz kimlik doğrulama (auth) yok — tüm admin API'leri şu an açık/korumasız. `users.passwordHash` artık hashleniyor ama login/session akışı yazılmadı.
-- İlk kurulumda otomatik oluşturulması gereken varsayılan admin kullanıcısı + `is_admin` sistem role'ü için seed script henüz yazılmadı (DESIGN.md 4.3 son not).
+- **LDAP login uygulanmadı** — `ldapjs` ile bind + login-time sync (DESIGN.md 8, karar 170) henüz yazılmadı; şu an sadece `authSource=local` kullanıcılar login olabiliyor, `ldap` kullanıcılar `POST /api/auth/login`'de 501 alır.
+- Chat bot tarafı (`/api/chat`) henüz `requireAuth()` ile korunmuyor — sadece admin API'leri korumalı; chat bot geliştirilirken eklenmeli.
 - `mcp-server/` sadece boş bir MCP server iskeleti; dinamik tool yükleme (mcp_integrations tablosundan) ve şablon yönetim tool'ları (10.6) henüz yazılmadı.
 - Admin panelinin **frontend'i** (React) henüz yok — sadece backend API'leri var.
 
 ## Sırada ne var (bir sonraki oturumda buradan devam)
 
-Kullanıcı/Skill/Role CRUD tamamlandı — DESIGN.md Bölüm 5'teki tüm admin panel ekranlarının backend'i (12.7 Bütçe hariç) bitti. Sırada, öncelik sırasına göre:
-- **Auth (login/session)** — artık `users.passwordHash` hazır olduğuna göre mantıklı sıradaki adım: login endpoint'i, session/JWT, admin API'lerini `is_admin` role'üne göre koruma.
-- Ya da **Bütçe (Budget) Yönetimi** (DESIGN.md Bölüm 12) — `role_mcp_permissions`/`role_ai_providers` artık var, bütçe modülü bunların üstüne kurulabilir; NULL `skill_id` unique kısıtlama düzeltmesi de bu sırada yapılmalı.
+Auth + Kullanıcı/Skill/Role CRUD tamamlandı — DESIGN.md Bölüm 5 ve 8'in backend'i (Bütçe/12.7 ve LDAP login hariç) bitti. Sırada, öncelik sırasına göre:
+- **Bütçe (Budget) Yönetimi** (DESIGN.md Bölüm 12) — `role_mcp_permissions`/`role_ai_providers`/auth artık var, bütçe modülü bunların üstüne kurulabilir; NULL `skill_id` unique kısıtlama düzeltmesi de bu sırada yapılmalı.
+- Ya da **Chat Bot temel akışı** (DESIGN.md Bölüm 6) — artık kullanıcı/skill/role/auth hazır olduğuna göre `chat_sessions`/`chat_messages` CRUD + AI provider'a gerçek istek atma başlanabilir; `requireAuth()` ile korunmalı.
+- Ya da **LDAP login** — `ldapjs` ile bind + login-time sync.
 - Bu oturumdaki commit'ler henüz `git push` edilmedi — bir sonraki oturumda önce `git status`/`git log` ile kontrol edip push'u tamamlamak gerekebilir.

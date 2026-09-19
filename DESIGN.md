@@ -86,7 +86,7 @@ Bileşenler:
 
 ### 4.3 Kullanıcı & Yetkilendirme
 
-- **`users`**: id, full_name, email, auth_source (`local` \| `ldap`), password_hash (local ise), ldap_dn (ldap ise), is_active, created_at.
+- **`users`**: id, full_name, email, auth_source (`local` \| `ldap`), password_hash (local ise), ldap_dn (ldap ise), is_active, must_change_password (BOOLEAN, varsayılan false — ilk kurulumda seed edilen admin için true), created_at.
 - **`skills`**: id, name, description — kullanıcının departman/görev/yetkinlik tanımı (ör. "Muhasebe", "Satış Sonrası Destek"). Bir kullanıcıya birden fazla skill atanabilir (`user_skills` n:n tablosu).
 - **`roles`**: id, name, description — MCP server üzerinden erişilebilecek API'leri ve bu API'lere özel GET request filtrelerini tanımlar. Bir kullanıcıya birden fazla role atanabilir (`user_roles` n:n tablosu).
 - **`role_mcp_permissions`**: role_id, mcp_integration_id, allowed_operations (JSONB — hangi tool/endpoint'lere izinli), get_filters (**serbest JSONB** — o role için zorunlu query filtreleri, ör. sadece kendi bölgesindeki kayıtlar; standart bir filtre DSL'i uygulanmayacak).
@@ -175,6 +175,7 @@ Bileşenler:
 - [x] `file_share` entegrasyonları: cache yok, **her seferinde dosya yeniden okunacak**
 - [x] Zamanlanmış `ai_transform` adımları da aynı prensiple **çalıştıran kullanıcının** (zamanlanmış çalıştırmada: şablonun son çalıştırılmasını tetikleyen/sahibi olan kullanıcının) yetkisi ve bütçesi üzerinden işler
 - [x] AI kullanımı için **bütçe (budget) yönetimi** eklenecek — global + skill bazlı + kullanıcı bazlı, kullanım/kalan görünürlüğü ile (bkz. yeni Bölüm 13)
+- [x] **Auth mekanizması**: `local` kullanıcılar için `POST /api/auth/login` (email+password) ile imzalanmış **JWT bearer token** (henüz frontend olmadığından cookie/session yerine basit `Authorization: Bearer` başlığı tercih edildi). Tüm `/api/admin/*` uçları `is_admin` role'üne sahip, aktif ve `must_change_password=false` bir kullanıcı gerektirir. LDAP login (`ldapjs` ile bind) henüz uygulanmadı — bkz. PROGRESS.md.
 
 ## 9. MCP Entegrasyon Tipleri (genişletme)
 
