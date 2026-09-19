@@ -5,14 +5,17 @@
   "workspaces": [
     "packages/*",
     "app",
-    "mcp-server"
+    "mcp-server",
+    "web"
   ],
   "scripts": {
     "db:generate": "npm run generate --workspace=packages/db",
     "db:migrate": "npm run migrate:dev --workspace=packages/db",
     "db:seed": "npm run seed --workspace=packages/db",
     "dev:app": "npm run dev --workspace=app",
-    "dev:mcp": "npm run dev --workspace=mcp-server"
+    "dev:mcp": "npm run dev --workspace=mcp-server",
+    "dev:web": "npm run dev --workspace=web",
+    "build:web": "npm run build --workspace=web"
   },
   "engines": {
     "node": ">=20"

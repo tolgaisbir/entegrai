@@ -15,6 +15,15 @@ npm run dev:app
 # Chat akışında tool çağrısının çalışması için bu servisin de ayakta olması gerekir;
 # ayakta değilse chat.ts sessizce "tool yok" varsayıp düz metin sohbete devam eder.
 npm run dev:mcp
+
+# Frontend (web/) — geliştirme sırasında ayrı Vite sunucusu, http://localhost:5173
+# /api isteklerini otomatik olarak localhost:3000'e (app/) proxy'ler (bkz. web/vite.config.ts).
+npm run dev:web
+
+# Prod/tek-sunucu modu: web/'i build edip app/'nin kendisinin servis etmesini sağlar.
+# Sonra sadece `npm run dev:app` (veya `npm start`) yeterli, http://localhost:3000
+# hem API'yi hem frontend'i tek origin'den sunar.
+npm run build:web
 ```
 
 **Gerekli `.env` dosyaları** (git'e dahil değil, `.env.example`'a bakın):
@@ -89,20 +98,30 @@ DB: Neon Postgres (`neondb`), migrationlar (`20260918234541_init`, `202609190822
     - Env değişkenleri (`.env.example`'a eklendi, hepsi opsiyonel — tanımlı değilse LDAP login tamamen kapalı): `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`, `LDAP_USER_SEARCH_FILTER`, `LDAP_EMAIL_ATTR`, `LDAP_FULLNAME_ATTR`.
     - **Bilinen risk**: `ldapjs` paketinin bakımı maintainer tarafından 2024'te resmen bırakıldı ("decommissioned" — kişisel/etik nedenlerle, teknik bir kusur değil). Paket hâlâ çalışıyor ve Node ekosisteminde bu iş için en yaygın kütüphane olmaya devam ediyor; DESIGN.md'nin zaten kararlaştırdığı kütüphane olduğu için değiştirilmedi, ama uzun vadede alternatif değerlendirmesi (fork, farklı paket, ya da maintainer'ın önerdiği gibi ayrı bir gateway) gündeme gelebilir.
     - **Uçtan uca gerçek şekilde test edildi**: `ldapjs`'in kendi `createServer()` API'siyle geçici, tek kullanıcılı bir test LDAP sunucusu (localhost:1389) kurulup gerçek bir bind+search akışına karşı doğrulandı — doğru şifre → başarılı login + DB'de yeni `ldap` kullanıcısı oluşturuluyor (`passwordHash=null`, `ldapDn` dolu); yanlış şifre → 401; bilinmeyen kullanıcı → 401; filter injection denemesi (`*)(mail=*`) → 401 (escape çalışıyor); tekrar login aynı kullanıcı id'sini kullanıyor (upsert doğru); admin panelinden `isActive=false` yapılan bir ldap kullanıcısı, doğru LDAP şifresiyle bile login olamıyor. Test verileri (DB kaydı, `.env`'e eklenen geçici `LDAP_*` değişkenleri, test sunucusu scripti) temizlendi.
-12. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
+12. **Frontend** (DESIGN.md Bölüm 7) — yeni `web/` workspace (Vite + React 19 + TypeScript + react-router-dom + @tanstack/react-query, custom minimal CSS — shadcn/MUI gibi bir kit yerine, bkz. DESIGN.md 7 uygulama notu)
+    - `web/src/api/client.ts` — tüm istekler `/api/*`'ye gider, token `localStorage`'da tutulur, her isteğe `Authorization: Bearer` eklenir, `ApiError` (status+body) fırlatır
+    - `web/src/auth/AuthContext.tsx` + `ProtectedRoute.tsx` — login/logout, `GET /auth/me` ile oturum geri yükleme, `RequireAuth` (giriş yoksa `/login`'e, `mustChangePassword` ise `/change-password`'a yönlendirir) ve `RequireAdmin` (`isAdmin` değilse `/chat`'e yönlendirir)
+    - `LoginPage`, `ChangePasswordPage` — DESIGN.md 8'deki auth akışının (ilk girişte şifre değişikliği zorunluluğu dahil) tam karşılığı
+    - **Chat arayüzü** (`ChatPage.tsx` + `ChatSidebar.tsx`) — sol frame'de skill'e göre gruplanmış sohbet geçmişi (DESIGN.md Bölüm 6), yeni sohbet başlatma (skill + opsiyonel AI sağlayıcı seçimi), mesaj thread'i (user/assistant/tool balonları — tool sonuçları JSON olarak, tool_use istekleri "🔧 Araç çağrılıyor: X" özeti olarak gösterilir), bütçe çubuğu (DESIGN.md 12.6), `budget_exceeded`/`ai_provider_error` hatalarının kullanıcıya okunabilir mesaj olarak gösterilmesi, oturum silme
+    - **Admin paneli** (`web/src/routes/admin/*`) — DESIGN.md Bölüm 5'teki 6 ekranın tamamı: AI Sağlayıcılar (+ bağlantı testi, `defaultParams` JSON editörü), MCP Entegrasyonları (+ test, `connectionConfig` JSON editörü), Skill'ler, Role'ler (+ MCP izinleri ve AI sağlayıcı erişimi için ayrı modaller), Kullanıcılar (+ skill/role atama modalı), Bütçe Yönetimi (provider seçimi → politika CRUD + kullanım özeti tablosu, DESIGN.md 12.7). Her sayfa liste tablosu + oluşturma/düzenleme modalı + silme (backend'in 409/400 hata mesajlarını `alert()` ile kullanıcıya gösterir — ör. son admin silinemez, kullanım geçmişi olan sağlayıcı silinemez) deseniyle yazıldı.
+    - `app/src/index.ts` güncellendi — `express.static(web/dist)` + `/api` ve `/health` dışındaki tüm GET isteklerini `index.html`'e düşüren bir SPA fallback (regex route) eklendi. Dev'de `web/`, kendi Vite sunucusunda (`npm run dev:web`, port 5173) çalışıp `/api`'yi `app/`'ye proxy'ler (bkz. `web/vite.config.ts`); prod'da `npm run build:web` sonrası tek başına `app/` (port 3000) hem API'yi hem frontend'i aynı origin'den sunar.
+    - **Test kapsamı ve önemli bir sınır**: `npm run build --workspace=web` temiz derleniyor (TypeScript strict mode dahil), Express static serving + SPA fallback + `/api` route'larının çakışmadığı curl ile doğrulandı (`/`, `/chat`, `/health`, bilinmeyen `/api/*` → 404), Vite dev sunucusunun `/api` proxy'si gerçek backend'e ulaşıp 401 döndüğü doğrulandı (proxy çalışıyor). **Bu ortamda tarayıcı/ekran görüntüsü alma aracı olmadığından, arayüz gerçek bir tarayıcıda görsel olarak test edilmedi** — React bileşenleri dikkatlice gözden geçirildi ve backend API şekilleriyle (`api/types.ts`) eşleştirildi, ama gerçek render/etkileşim/CSS görünümü doğrulanmadı. Bir sonraki oturumda (veya kullanıcı tarafından) `npm run dev:web` + `npm run dev:app` ile tarayıcıda uçtan uca gezilmesi gerekiyor.
+13. Git deposu: https://github.com/tolgaisbir/entegrai.git — 2 commit push edildi (scaffold + AI providers CRUD); bu oturumdaki commit'ler henüz push edilmedi.
 
 ## Bilinen eksikler / ertelenen teknik notlar
 
+- **Frontend hiç tarayıcıda görsel olarak test edilmedi** (bkz. madde 12 sonu) — bu ortamda browser/screenshot aracı yok. Öncelikli bir sonraki adım: gerçek bir tarayıcıda gezip görsel/etkileşim sorunlarını bulmak.
 - **MCP tool çağrısı sadece `http_api` tipini destekliyor** — `database`/`file_share`/`smtp_mail`/`internal_tool` entegrasyonları hiç tool olarak sunulmuyor (bkz. madde 10). `smtp_mail` için DESIGN.md 9.1'deki ekstra onay/audit-log gereksinimleri de henüz yok.
 - **OpenAI tarafı gerçek bir key ile hiç test edilmedi** — sadece Anthropic ile canlı doğrulandı (bkz. madde 10); OpenAI'nin `tool_calls`/`role:"tool"` serileştirmesi sadece mock fetch ile doğrulandı.
-- Şablon (`templates`, Bölüm 10) hiç yazılmadı — `template_ai_transform` kaynaklı `ai_usage_records` şu an teorik, hiç üretilmiyor. `template.create_from_session` gibi MCP üzerinden şablon oluşturma tool'ları (10.6) da yok.
-- Admin panelinin **frontend'i** (React) henüz yok — sadece backend API'leri var. Chat bot arayüzü de yok.
+- Şablon (`templates`, Bölüm 10) hiç yazılmadı — `template_ai_transform` kaynaklı `ai_usage_records` şu an teorik, hiç üretilmiyor. `template.create_from_session` gibi MCP üzerinden şablon oluşturma tool'ları (10.6) da yok; frontend'de de şablon ekranı yok.
 - `isActive=false` yapılan son admin kullanıcısı için bir koruma yok (sadece rol kaldırma/silme korunuyor) — düşük öncelikli, admin panelden dikkatli kullanım gerekiyor.
 - `mcp-integrations`/`roles` silme uçlarında aynı FK-409 sağlamlaştırması yapılmadı (aiProviders/skills'te yapıldı) — artık mcp_integrations'a bağımlı gerçek veri (role_mcp_permissions zaten cascade, ama ileride mail_send_logs/template_steps RESTRICT olabilir) üretilebileceğinden, bu tabloya dokunan bir sonraki özellik bu deseni de eklemeli.
+- Frontend'de: sayfalama yok (tüm listeler tek seferde çekiliyor — küçük veri hacimlerinde sorun değil), oturum yeniden adlandırma UI'ı yok (backend `PATCH /chat/sessions/:id` hazır ama arayüze bağlanmadı), toast/bildirim sistemi yok (hata gösterimi `alert()`/inline text ile), responsive/mobil düzen hiç düşünülmedi (masaüstü genişlikleri hedeflendi).
 
 ## Sırada ne var (bir sonraki oturumda buradan devam)
 
-Auth (local + LDAP) + Kullanıcı/Skill/Role CRUD + Chat Bot temel akışı + Bütçe Yönetimi + MCP tool çağrısı (http_api, gerçek Anthropic key ile uçtan uca doğrulandı) tamamlandı. Sırada, öncelik sırasına göre:
+Auth (local + LDAP) + Kullanıcı/Skill/Role CRUD + Chat Bot temel akışı + Bütçe Yönetimi + MCP tool çağrısı (http_api, gerçek Anthropic key ile uçtan uca doğrulandı) + Frontend (tarayıcıda henüz test edilmedi) tamamlandı. Sırada, öncelik sırasına göre:
+- **Frontend'i gerçek bir tarayıcıda test etmek/düzeltmek** — bu oturumun en büyük açık maddesi.
 - **Şablonlar (Template)** (DESIGN.md Bölüm 10) — MCP tool çağrısı artık var, üzerine kurulabilir.
 - Admin panel/chat bot **frontend'i (React)** henüz hiç başlanmadı — backend'in büyük kısmı bittiğine göre bir noktada gündeme gelmeli.
 - Bu oturumdaki commit'ler henüz `git push` edilmedi — bir sonraki oturumda önce `git status`/`git log` ile kontrol edip push'u tamamlamak gerekebilir.

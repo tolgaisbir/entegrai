@@ -26,6 +26,18 @@ app.use("/api/admin", adminRouter);
 // bkz. DESIGN.md Bölüm 6 — Chat Bot Deneyimi
 app.use("/api/chat", chatRouter);
 
+// DESIGN.md Bölüm 7 — admin panel + chat bot, aynı Express uygulaması içinde ayrı
+// route'lar olarak sunulur. Prod build'i web/dist'ten statik servis edilir; dev'de
+// frontend ayrı bir Vite sunucusunda (npm run dev:web) /api'yi buraya proxy'ler,
+// bu yüzden web/dist yoksa (henüz build alınmamışsa) sessizce atlanır.
+const webDist = path.resolve(__dirname, "../../web/dist");
+app.use(express.static(webDist));
+app.get(/^(?!\/api|\/health).*/, (_req, res, next) => {
+  res.sendFile(path.join(webDist, "index.html"), (err) => {
+    if (err) next();
+  });
+});
+
 const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   console.error(err);
   res.status(500).json({
